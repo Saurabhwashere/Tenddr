@@ -6,4 +6,4 @@ openai>=1.6.1
 pinecone>=5.0.0
 python-multipart>=0.0.6
 requests>=2.31.0
-zeroentropy>=1.0.0
+zeroentropy>=0.1.0a6
