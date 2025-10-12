@@ -589,6 +589,15 @@ curl -X POST http://localhost:8000/debug/query/YOUR_CONTRACT_ID \
 **Cause:** Server restarted (in-memory storage cleared)  
 **Fix:** Re-upload document OR implement database storage
 
+#### "Pinecone error: message length too large (400)"
+**Cause:** Upsert request exceeds Pinecone's 4 MB limit (large contracts with many chunks)  
+**Fix:** Already implemented - batched upserts (50 vectors/request) + text truncation (2000 chars)  
+**Configure:** Set environment variables:
+```bash
+export PINECONE_UPSERT_BATCH_SIZE=50      # Lower if still hitting limits
+export PINECONE_TEXT_PREVIEW_CHARS=2000   # Reduce to 1200 if needed
+```
+
 ### Debug Tools
 
 ```bash

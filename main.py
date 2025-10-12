@@ -134,7 +134,8 @@ async def upload_contract(file: UploadFile = File(...)):
 
         # Run comprehensive analysis (all 7 types) using RAG
         print(f"📄 Analyzing contract: {file.filename}")
-        analysis_results = run_comprehensive_analysis(contract_id, text)
+        # Use RAG-only (no full text) to avoid 300K token limit
+        analysis_results = run_comprehensive_analysis(contract_id, "")
         
         # Save analysis results to database
         save_contract_analysis(
@@ -220,7 +221,12 @@ async def reanalyze_contract(contract_id: str):
         # Delete old vectors from Pinecone and store new ones
         print("🗑️  Deleting old vectors from Pinecone...")
         index = get_or_create_index()
-        index.delete(filter={"contract_id": contract_id})
+        try:
+            index.delete(filter={"contract_id": contract_id})
+            print("   ✓ Old vectors deleted")
+        except Exception as e:
+            print(f"   ⚠️  Could not delete old vectors: {str(e)[:100]}")
+            print("   → Proceeding with upsert (will overwrite by ID)")
         
         # Store new chunks with updated metadata
         print("💾 Storing new chunks with updated metadata...")
@@ -257,7 +263,8 @@ async def reanalyze_contract(contract_id: str):
         
         # Run comprehensive analysis
         print(f"📄 Re-analyzing contract...")
-        analysis_results = run_comprehensive_analysis(contract_id, text)
+        # Use RAG-only (no full text) to avoid 300K token limit
+        analysis_results = run_comprehensive_analysis(contract_id, "")
         
         # Save updated analysis results
         save_contract_analysis(

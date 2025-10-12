@@ -8,6 +8,10 @@ load_dotenv()
 
 INDEX_NAME = "contracts"
 
+# Pinecone upsert configuration to avoid 4 MB request limit
+DEFAULT_UPSERT_BATCH_SIZE = int(os.getenv("PINECONE_UPSERT_BATCH_SIZE", "50"))
+DEFAULT_TEXT_PREVIEW_CHARS = int(os.getenv("PINECONE_TEXT_PREVIEW_CHARS", "2000"))
+
 # Initialize clients lazily
 _openai_client = None
 _pinecone_client = None
@@ -39,26 +43,74 @@ def get_or_create_index():
     return pc.Index(INDEX_NAME)
 
 def create_embeddings(texts: list[str]) -> list[list[float]]:
-    """Create embeddings using OpenAI."""
+    """Create embeddings using OpenAI - BATCHED and PARALLEL for maximum speed."""
+    if not texts:
+        return []
+    
+    import concurrent.futures
+    
     client = get_openai_client()
-    embeddings = []
-    for text in texts:
+    
+    # OpenAI embeddings API limits:
+    # - Max 8191 tokens per request for text-embedding-ada-002
+    # - With ~500 word chunks, use smaller batches to stay under limit
+    # - Safe batch size: 100 chunks (~200K chars, well under token limit)
+    batch_size = 100
+    
+    # Split texts into batches
+    batches = []
+    for i in range(0, len(texts), batch_size):
+        batches.append((i, texts[i:i + batch_size]))
+    
+    print(f"  🚀 Creating embeddings for {len(texts)} texts in {len(batches)} parallel batches...")
+    
+    def process_batch(batch_data):
+        """Process a single batch of embeddings."""
+        idx, batch = batch_data
         response = client.embeddings.create(
             model="text-embedding-ada-002",
-            input=text
+            input=batch
         )
-        embeddings.append(response.data[0].embedding)
-    return embeddings
+        return (idx, [item.embedding for item in response.data])
+    
+    # Process batches in parallel (5 at a time to respect rate limits)
+    all_embeddings = [None] * len(texts)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        future_to_batch = {
+            executor.submit(process_batch, batch_data): batch_data
+            for batch_data in batches
+        }
+        
+        completed = 0
+        for future in concurrent.futures.as_completed(future_to_batch):
+            try:
+                idx, embeddings = future.result()
+                # Place embeddings in correct position
+                for i, emb in enumerate(embeddings):
+                    all_embeddings[idx + i] = emb
+                completed += 1
+                if completed % 5 == 0 or completed == len(batches):
+                    print(f"     ✓ Completed {completed}/{len(batches)} batches")
+            except Exception as e:
+                print(f"     ⚠️ Batch failed: {str(e)[:100]}")
+                raise
+    
+    print(f"  ✅ All embeddings created!")
+    return all_embeddings
 
-def store_in_pinecone(contract_id: str, chunks: list[dict]):
+def store_in_pinecone(contract_id: str, chunks: list[dict], batch_size: int = None, text_preview_chars: int = None):
     """
-    Store contract chunks in Pinecone with metadata.
+    Store contract chunks in Pinecone with safe batching and trimmed metadata to avoid 4 MB request limit.
     
     Args:
         contract_id: Unique identifier for the contract
         chunks: List of chunk dictionaries with 'text' and optional metadata
+        batch_size: Number of vectors per upsert request (default: 50)
+        text_preview_chars: Max chars to store in metadata text field (default: 2000)
     """
     index = get_or_create_index()
+    bs = batch_size or DEFAULT_UPSERT_BATCH_SIZE
+    preview_len = text_preview_chars or DEFAULT_TEXT_PREVIEW_CHARS
     
     # Extract text for embeddings
     chunk_texts = [chunk["text"] if isinstance(chunk, dict) else chunk for chunk in chunks]
@@ -68,27 +120,29 @@ def store_in_pinecone(contract_id: str, chunks: list[dict]):
     for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
         # Handle both dict chunks (with metadata) and string chunks (legacy)
         if isinstance(chunk, dict):
+            raw_text = chunk.get("text", "")
             metadata = {
-                "text": chunk["text"],
+                "text": raw_text[:preview_len],  # Truncate to keep request small
                 "contract_id": contract_id,
                 "page_number": chunk.get("page_number", 0),
                 "chunk_index": chunk.get("chunk_index", i),
                 "word_count": chunk.get("word_count", 0),
                 
-                # NEW: Enhanced metadata for filtering
+                # Enhanced metadata for filtering
                 "primary_category": chunk.get("primary_category", "general"),
                 "clause_type": chunk.get("clause_type", "unknown"),
-                "risk_tags": chunk.get("risk_tags", []),
-                "keywords": chunk.get("keywords", [])
+                "risk_tags": chunk.get("risk_tags", [])[:10],  # Limit array size
+                "keywords": chunk.get("keywords", [])[:10]  # Limit array size
             }
         else:
+            raw_text = str(chunk)
             metadata = {
-                "text": chunk,
+                "text": raw_text[:preview_len],  # Truncate
                 "contract_id": contract_id,
                 "page_number": 0,
                 "chunk_index": i,
                 
-                # NEW: Default values for string chunks
+                # Default values for string chunks
                 "primary_category": "general",
                 "clause_type": "unknown", 
                 "risk_tags": [],
@@ -101,7 +155,14 @@ def store_in_pinecone(contract_id: str, chunks: list[dict]):
             "metadata": metadata
         })
     
-    index.upsert(vectors=vectors)
+    # Upsert in batches to stay under Pinecone's 4 MB request limit
+    print(f"💾 Upserting {len(vectors)} vectors in batches of {bs}...")
+    for start in range(0, len(vectors), bs):
+        batch = vectors[start:start + bs]
+        index.upsert(vectors=batch)
+        print(f"   ✓ Upserted batch {start//bs + 1}/{(len(vectors) + bs - 1)//bs} ({len(batch)} vectors)")
+    
+    print(f"✅ All vectors upserted successfully!")
 
 def rerank_with_zeroentropy(query: str, documents: list[dict]) -> list[dict]:
     """

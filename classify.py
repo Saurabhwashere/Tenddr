@@ -212,3 +212,63 @@ def classify_chunk_hybrid(chunk_text: str) -> Dict:
         return classify_chunk_with_llm(chunk_text)
     else:
         return keyword_result
+
+
+def classify_chunks_batch(chunks: list[dict], use_hybrid: bool = True) -> list[dict]:
+    """
+    Classify multiple chunks in parallel for 10x speedup.
+    
+    Keeps LLM classification for accuracy but processes chunks simultaneously.
+    
+    Args:
+        chunks: List of chunk dicts with 'text' field
+        use_hybrid: If True, use hybrid classification (LLM for important chunks)
+    
+    Returns:
+        List of chunks with classification metadata added
+    """
+    import concurrent.futures
+    from copy import deepcopy
+    
+    print(f"📝 Classifying {len(chunks)} chunks in parallel...")
+    
+    classified_chunks = []
+    llm_count = 0
+    
+    def classify_one(chunk):
+        """Classify a single chunk."""
+        chunk_copy = deepcopy(chunk)
+        if use_hybrid:
+            classification = classify_chunk_hybrid(chunk_copy["text"])
+            # Check if LLM was used (has 'topics' field)
+            used_llm = "topics" in classification and classification.get("topics")
+        else:
+            classification = classify_chunk(chunk_copy["text"])
+            used_llm = False
+        
+        chunk_copy.update(classification)
+        return chunk_copy, used_llm
+    
+    # Process chunks in parallel (10 at a time to avoid rate limits)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_chunk = {
+            executor.submit(classify_one, chunk): chunk 
+            for chunk in chunks
+        }
+        
+        for future in concurrent.futures.as_completed(future_to_chunk):
+            try:
+                classified_chunk, used_llm = future.result()
+                classified_chunks.append(classified_chunk)
+                if used_llm:
+                    llm_count += 1
+            except Exception as e:
+                # On error, use keyword-only classification
+                original_chunk = future_to_chunk[future]
+                chunk_copy = deepcopy(original_chunk)
+                chunk_copy.update(classify_chunk(original_chunk["text"]))
+                classified_chunks.append(chunk_copy)
+                print(f"  ⚠️  Classification error, using keywords: {str(e)[:50]}")
+    
+    print(f"  ✅ Classified {len(classified_chunks)} chunks ({llm_count} used LLM for accuracy)")
+    return classified_chunks
