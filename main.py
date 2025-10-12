@@ -1,14 +1,36 @@
-# FastAPI app
+# FastAPI app with Supabase integration
 import os
 import uuid
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
+import io
 
-from pdf_processor import extract_text_from_pdf, extract_text_with_pages, create_chunks_with_pages
-from rag import store_in_pinecone, query_contract, generate_response
+from pdf_processor import extract_text_from_pdf, extract_text_with_pages, create_chunks_with_pages, create_enhanced_chunks_with_pages
+from rag import store_in_pinecone, query_contract, generate_response, get_or_create_index
 from prompts import QA_SYSTEM_PROMPT
 from analyzers import run_comprehensive_analysis
+from risk_detector import run_risk_analysis
+
+# Supabase integration
+from database import (
+    create_contract,
+    update_contract_status,
+    save_contract_analysis,
+    save_risk_analysis,
+    get_contract_complete,
+    list_all_contracts,
+    check_duplicate_by_hash,
+    save_user_question,
+    update_pinecone_status
+)
+from storage import (
+    upload_pdf,
+    download_pdf,
+    calculate_file_hash,
+    get_pdf_url
+)
 
 app = FastAPI()
 
@@ -21,98 +43,325 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Simple in-memory storage for MVP (use database in production)
-contracts_data = {}
-
 class QuestionRequest(BaseModel):
     question: str
 
 @app.post("/upload")
 async def upload_contract(file: UploadFile = File(...)):
-    """Upload and process a PDF contract."""
+    """Upload and process a PDF contract with Supabase storage."""
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files allowed")
+    
+    # Read file content
+    content = await file.read()
+    file_size = len(content)
+    
+    # Calculate file hash for duplicate detection
+    file_hash = calculate_file_hash(content)
+    
+    # Check if file already exists
+    existing_id = check_duplicate_by_hash(file_hash)
+    if existing_id:
+        print(f"📋 Duplicate detected! Returning existing contract: {existing_id}")
+        return {
+            "id": existing_id,
+            "message": "This contract was already uploaded",
+            "is_duplicate": True
+        }
     
     # Generate unique ID
     contract_id = str(uuid.uuid4())
     
-    # Save file temporarily
+    # Upload to Supabase Storage
+    storage_path = upload_pdf(contract_id, content, file.filename)
+    
+    # Create contract record in database
+    create_contract(
+        contract_id=contract_id,
+        filename=file.filename,
+        storage_path=storage_path,
+        file_hash=file_hash,
+        file_size=file_size
+    )
+    
+    # Save file temporarily for processing
     temp_path = f"/tmp/{contract_id}.pdf"
     with open(temp_path, "wb") as f:
-        content = await file.read()
         f.write(content)
     
-    # Extract text with page numbers
-    pages_data = extract_text_with_pages(temp_path)
+    try:
+        # Extract text with page numbers
+        pages_data = extract_text_with_pages(temp_path)
+        
+        # Create full text for checklist/risk analysis
+        text = "\n\n".join([page["text"] for page in pages_data])
+        
+        # Create enhanced chunks with metadata for better filtering
+        chunks = create_enhanced_chunks_with_pages(pages_data, chunk_size=500, overlap=100)
+        
+        # Store in Pinecone
+        store_in_pinecone(contract_id, chunks)
+        update_pinecone_status(contract_id, indexed=True)
+
+        # Default empty risk analysis (used if risk detection fails)
+        empty_risk_analysis = {
+            "risks_by_severity": {
+                "critical": [],
+                "high": [],
+                "medium": [],
+                "low": []
+            },
+            "all_risks": [],
+            "summary": {
+                "total_risks_checked": 0,
+                "total_risks_found": 0,
+                "critical_count": 0,
+                "high_count": 0,
+                "medium_count": 0,
+                "low_count": 0,
+                "overall_risk_level": "unknown"
+            }
+        }
+
+        # Run automated risk detection (uses RAG to search entire contract)
+        try:
+            print(f"🔍 Running automated risk detection...")
+            risk_results = run_risk_analysis(contract_id, model="gpt-4o")
+        except Exception as e:
+            # If risk detection fails, log error but continue with other analyses
+            print(f"⚠️ Risk detection failed: {e}")
+            risk_results = empty_risk_analysis
+
+        # Run comprehensive analysis (all 7 types) using RAG
+        print(f"📄 Analyzing contract: {file.filename}")
+        analysis_results = run_comprehensive_analysis(contract_id, text)
+        
+        # Save analysis results to database
+        save_contract_analysis(
+            contract_id=contract_id,
+            analysis_results=analysis_results,
+            validation=analysis_results["validation"]
+        )
+        
+        # Save risk analysis to database
+        save_risk_analysis(contract_id=contract_id, risk_results=risk_results)
+        
+        # Update contract status to completed
+        update_contract_status(contract_id, status="completed")
+        
+        # Clean up temp file
+        os.remove(temp_path)
+        
+        print(f"✅ Contract processed successfully: {contract_id}")
+        
+        # Return upload success with risk summary for quick feedback
+        return {
+            "id": contract_id,
+            "filename": file.filename,
+            "risk_summary": {
+                "critical_count": risk_results["summary"]["critical_count"],
+                "high_count": risk_results["summary"]["high_count"],
+                "medium_count": risk_results["summary"]["medium_count"],
+                "overall_risk_level": risk_results["summary"]["overall_risk_level"]
+            }
+        }
+        
+    except Exception as e:
+        # If processing fails, update status and clean up
+        print(f"❌ Processing failed: {e}")
+        update_contract_status(contract_id, status="failed", error=str(e))
+        
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        
+        raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+
+@app.post("/reanalyze/{contract_id}")
+async def reanalyze_contract(contract_id: str):
+    """Re-run analysis on an existing contract (useful when analysis logic improves)."""
     
-    # Create full text for checklist/risk analysis
-    text = "\n\n".join([page["text"] for page in pages_data])
+    # Check if contract exists
+    contract = get_contract_complete(contract_id)
+    if not contract:
+        raise HTTPException(status_code=404, detail="Contract not found")
     
-    # Create overlapping chunks with page metadata for RAG
-    chunks = create_chunks_with_pages(pages_data, chunk_size=500, overlap=100)
+    print(f"🔄 Re-analyzing contract: {contract_id}")
     
-    # Store in Pinecone
-    store_in_pinecone(contract_id, chunks)
+    # Initialize temp_path outside try block
+    temp_path = f"/tmp/{contract_id}_reanalyze.pdf"
     
-    # Run comprehensive analysis (all 7 types) using RAG
-    print(f"📄 Analyzing contract: {file.filename}")
-    analysis_results = run_comprehensive_analysis(contract_id, text)
-    
-    # Store results
-    contracts_data[contract_id] = {
-        "id": contract_id,
-        "filename": file.filename,
-        "text": text,
-        # All 7 analysis results
-        "compliance_checklist": analysis_results["compliance_checklist"],
-        "clause_summaries": analysis_results["clause_summaries"],
-        "scope_alignment": analysis_results["scope_alignment"],
-        "completeness_check": analysis_results["completeness_check"],
-        "timeline_milestones": analysis_results["timeline_milestones"],
-        "financial_risks": analysis_results["financial_risks"],
-        "audit_trail": analysis_results["audit_trail"],
-        "validation": analysis_results["validation"]
-    }
-    
-    # Clean up temp file
-    os.remove(temp_path)
-    
-    return {"id": contract_id}
+    try:
+        # Update status to processing (not "reprocessing" - that's not in the allowed values)
+        update_contract_status(contract_id, status="processing")
+        
+        # Get storage path from contract record
+        storage_path = contract.get("storage_path")
+        if not storage_path:
+            raise HTTPException(
+                status_code=400, 
+                detail="Contract has no stored PDF file. This contract may have been uploaded before Supabase integration. Please re-upload the contract."
+            )
+        
+        # Download PDF from Supabase Storage
+        from storage import download_pdf
+        pdf_content = download_pdf(storage_path)
+        
+        # Save temporarily (temp_path already defined above)
+        with open(temp_path, "wb") as f:
+            f.write(pdf_content)
+        
+        # Extract text with page numbers
+        pages_data = extract_text_with_pages(temp_path)
+        text = "\n\n".join([page["text"] for page in pages_data])
+        
+        # Re-create enhanced chunks with metadata
+        chunks = create_enhanced_chunks_with_pages(pages_data, chunk_size=500, overlap=100)
+        
+        # Delete old vectors from Pinecone and store new ones
+        print("🗑️  Deleting old vectors from Pinecone...")
+        index = get_or_create_index()
+        index.delete(filter={"contract_id": contract_id})
+        
+        # Store new chunks with updated metadata
+        print("💾 Storing new chunks with updated metadata...")
+        store_in_pinecone(contract_id, chunks)
+        update_pinecone_status(contract_id, indexed=True)
+        
+        # Default empty risk analysis (used if risk detection fails)
+        empty_risk_analysis = {
+            "risks_by_severity": {
+                "critical": [],
+                "high": [],
+                "medium": [],
+                "low": []
+            },
+            "all_risks": [],
+            "summary": {
+                "total_risks_checked": 0,
+                "total_risks_found": 0,
+                "critical_count": 0,
+                "high_count": 0,
+                "medium_count": 0,
+                "low_count": 0,
+                "overall_risk_level": "unknown"
+            }
+        }
+        
+        # Run automated risk detection
+        try:
+            print(f"🔍 Re-running automated risk detection...")
+            risk_results = run_risk_analysis(contract_id, model="gpt-4o")
+        except Exception as e:
+            print(f"⚠️ Risk detection failed: {e}")
+            risk_results = empty_risk_analysis
+        
+        # Run comprehensive analysis
+        print(f"📄 Re-analyzing contract...")
+        analysis_results = run_comprehensive_analysis(contract_id, text)
+        
+        # Save updated analysis results
+        save_contract_analysis(
+            contract_id=contract_id,
+            analysis_results=analysis_results,
+            validation=analysis_results["validation"]
+        )
+        
+        # Save updated risk analysis
+        save_risk_analysis(contract_id, risk_results)
+        
+        # Update status to completed
+        update_contract_status(contract_id, status="completed")
+        
+        # Clean up temp file
+        os.remove(temp_path)
+        
+        print(f"✅ Re-analysis complete: {contract_id}")
+        
+        return {
+            "id": contract_id,
+            "message": "Re-analysis completed successfully",
+            "risk_summary": {
+                "critical_count": risk_results["summary"]["critical_count"],
+                "high_count": risk_results["summary"]["high_count"],
+                "medium_count": risk_results["summary"]["medium_count"],
+                "overall_risk_level": risk_results["summary"]["overall_risk_level"]
+            }
+        }
+        
+    except Exception as e:
+        print(f"❌ Re-analysis failed: {e}")
+        update_contract_status(contract_id, status="failed", error=str(e))
+        
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        
+        raise HTTPException(status_code=500, detail=f"Re-analysis failed: {str(e)}")
 
 @app.get("/results/{contract_id}")
 async def get_results(contract_id: str):
-    """Get comprehensive analysis results for a contract."""
-    if contract_id not in contracts_data:
+    """Get comprehensive analysis results for a contract from Supabase."""
+    # Get contract with all analyses from database
+    data = get_contract_complete(contract_id)
+    
+    if not data:
         raise HTTPException(status_code=404, detail="Contract not found")
     
-    data = contracts_data[contract_id]
+    # Default empty risk analysis for backward compatibility
+    empty_risk_analysis = {
+        "risks_by_severity": {
+            "critical": [],
+            "high": [],
+            "medium": [],
+            "low": []
+        },
+        "all_risks": [],
+        "summary": {
+            "total_risks_checked": 0,
+            "total_risks_found": 0,
+            "critical_count": 0,
+            "high_count": 0,
+            "medium_count": 0,
+            "low_count": 0,
+            "overall_risk_level": "unknown"
+        }
+    }
     
-    # Handle both old and new format contracts
-    # Old format had "checklist" and "risks", new format has 7 analysis types
+    # Return formatted response
     return {
-        "id": data.get("id", contract_id),
+        "id": data.get("id"),
         "filename": data.get("filename", "Unknown"),
-        # All 7 analysis results (with fallbacks for old format)
-        "compliance_checklist": data.get("compliance_checklist", data.get("checklist", "Analysis not available. Please re-upload the contract.")),
-        "clause_summaries": data.get("clause_summaries", data.get("risks", "Analysis not available. Please re-upload the contract.")),
-        "scope_alignment": data.get("scope_alignment", "Analysis not available. Please re-upload the contract."),
-        "completeness_check": data.get("completeness_check", "Analysis not available. Please re-upload the contract."),
-        "timeline_milestones": data.get("timeline_milestones", "Analysis not available. Please re-upload the contract."),
-        "financial_risks": data.get("financial_risks", "Analysis not available. Please re-upload the contract."),
-        "audit_trail": data.get("audit_trail", "Analysis not available. Please re-upload the contract."),
-        "validation": data.get("validation", {
+        # Risk analysis
+        "risk_analysis": {
+            "summary": data.get("risk_summary") or empty_risk_analysis["summary"],
+            "risks_by_severity": data.get("risks_by_severity") or empty_risk_analysis["risks_by_severity"],
+            "all_risks": data.get("all_risks") or empty_risk_analysis["all_risks"]
+        },
+        # All 7 comprehensive analysis results
+        "compliance_checklist": data.get("compliance_checklist") or "Analysis not available.",
+        "clause_summaries": data.get("clause_summaries") or "Analysis not available.",
+        "scope_alignment": data.get("scope_alignment") or "Analysis not available.",
+        "completeness_check": data.get("completeness_check") or "Analysis not available.",
+        "timeline_milestones": data.get("timeline_milestones") or "Analysis not available.",
+        "financial_risks": data.get("financial_risks") or "Analysis not available.",
+        "audit_trail": data.get("audit_trail") or "Analysis not available.",
+        "validation": data.get("validation") or {
             "completeness_score": 0.0,
             "status": "INCOMPLETE",
             "sections_completed": 0,
             "total_sections": 7,
-            "recommendation": "Please re-upload for full analysis"
-        })
+            "recommendation": "Analysis not available"
+        }
     }
 
 @app.post("/qa/{contract_id}")
 async def ask_question(contract_id: str, request: QuestionRequest):
-    """Ask a question about a contract."""
+    """Ask a question about a contract and save to history."""
     try:
+        # Verify contract exists
+        contract = get_contract_complete(contract_id)
+        if not contract:
+            raise HTTPException(status_code=404, detail="Contract not found")
+        
         # Get relevant context from Pinecone
         context_chunks = query_contract(contract_id, request.question)
         
@@ -120,7 +369,7 @@ async def ask_question(contract_id: str, request: QuestionRequest):
         if not context_chunks:
             raise HTTPException(
                 status_code=404, 
-                detail="Contract not found in database. Please upload the document again."
+                detail="Contract not found in vector database. Please re-upload the document."
             )
         
         context = "\n\n".join(context_chunks)
@@ -129,7 +378,16 @@ async def ask_question(contract_id: str, request: QuestionRequest):
         prompt = QA_SYSTEM_PROMPT.format(context=context, question=request.question)
         answer = generate_response(prompt)
         
+        # Save question and answer to database
+        save_user_question(
+            contract_id=contract_id,
+            question=request.question,
+            answer=answer,
+            chunks_used=context_chunks[:5]  # Save top 5 chunks for reference
+        )
+        
         return {"answer": answer}
+        
     except Exception as e:
         # If it's already an HTTPException, re-raise it
         if isinstance(e, HTTPException):
@@ -141,27 +399,71 @@ async def ask_question(contract_id: str, request: QuestionRequest):
 async def root():
     return {"message": "Contract Analysis API"}
 
-@app.get("/debug/contracts")
+@app.get("/contracts")
 async def list_contracts():
-    """List contracts in memory and check Pinecone status."""
+    """List all contracts in database with summary info."""
+    try:
+        contracts = list_all_contracts()
+        return {
+            "contracts": contracts,
+            "count": len(contracts)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error listing contracts: {str(e)}")
+
+@app.get("/pdf/{contract_id}")
+async def get_pdf(contract_id: str):
+    """Serve PDF file for viewing."""
+    try:
+        # Get contract from database
+        contract = get_contract_complete(contract_id)
+        if not contract:
+            raise HTTPException(status_code=404, detail="Contract not found")
+        
+        # Download PDF from storage
+        pdf_bytes = download_pdf(contract["storage_path"])
+        
+        # Return as streaming response
+        return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'inline; filename="{contract["filename"]}"'
+            }
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error serving PDF: {str(e)}")
+
+@app.get("/debug/contracts")
+async def debug_contracts():
+    """Debug endpoint: Show database and Pinecone status."""
     from rag import get_pinecone_client
     
     try:
+        # Get database counts
+        contracts = list_all_contracts()
+        
+        # Get Pinecone status
         pc = get_pinecone_client()
         indexes = pc.list_indexes()
         
         return {
-            "in_memory_contracts": list(contracts_data.keys()),
-            "in_memory_count": len(contracts_data),
+            "database_contracts": len(contracts),
             "pinecone_indexes": indexes.names(),
-            "note": "If server restarted, in_memory will be empty but Pinecone data persists"
+            "recent_contracts": [
+                {
+                    "id": c["id"],
+                    "filename": c["filename"],
+                    "status": contracts[0].get("risk_level", "N/A") if contracts else "N/A",
+                    "uploaded": c["uploaded_at"]
+                }
+                for c in contracts[:5]  # Show last 5
+            ],
+            "note": "All contract data persists in Supabase + Pinecone"
         }
     except Exception as e:
-        return {
-            "in_memory_contracts": list(contracts_data.keys()),
-            "in_memory_count": len(contracts_data),
-            "error": str(e)
-        }
+        return {"error": str(e)}
 
 @app.post("/debug/query/{contract_id}")
 async def debug_query(contract_id: str, request: QuestionRequest):
@@ -257,3 +559,32 @@ async def debug_query(contract_id: str, request: QuestionRequest):
             "scores": "Higher = more relevant. Pinecone uses cosine similarity (0-1), reranker uses custom scoring"
         }
     }
+
+@app.get("/debug/metadata/{contract_id}")
+async def debug_metadata(contract_id: str):
+    """Debug endpoint to inspect metadata for a contract."""
+    try:
+        from rag import get_or_create_index
+        index = get_or_create_index()
+        
+        # Fetch a sample of vectors for this contract
+        results = index.query(
+            vector=[0]*1536,  # dummy vector for filter-only query
+            top_k=10,
+            filter={"contract_id": contract_id},
+            include_metadata=True
+        )
+        
+        return [
+            {
+                "page": match["metadata"].get("page_number"),
+                "category": match["metadata"].get("primary_category"),
+                "clause_type": match["metadata"].get("clause_type"),
+                "risk_tags": match["metadata"].get("risk_tags", []),
+                "keywords": match["metadata"].get("keywords", []),
+                "preview": match["metadata"].get("text", "")[:160] + "..."
+            }
+            for match in results.get("matches", [])
+        ]
+    except Exception as e:
+        return {"error": str(e)}

@@ -73,14 +73,26 @@ def store_in_pinecone(contract_id: str, chunks: list[dict]):
                 "contract_id": contract_id,
                 "page_number": chunk.get("page_number", 0),
                 "chunk_index": chunk.get("chunk_index", i),
-                "word_count": chunk.get("word_count", 0)
+                "word_count": chunk.get("word_count", 0),
+                
+                # NEW: Enhanced metadata for filtering
+                "primary_category": chunk.get("primary_category", "general"),
+                "clause_type": chunk.get("clause_type", "unknown"),
+                "risk_tags": chunk.get("risk_tags", []),
+                "keywords": chunk.get("keywords", [])
             }
         else:
             metadata = {
                 "text": chunk,
                 "contract_id": contract_id,
                 "page_number": 0,
-                "chunk_index": i
+                "chunk_index": i,
+                
+                # NEW: Default values for string chunks
+                "primary_category": "general",
+                "clause_type": "unknown", 
+                "risk_tags": [],
+                "keywords": []
             }
         
         vectors.append({
@@ -159,13 +171,13 @@ def rerank_with_zeroentropy(query: str, documents: list[dict]) -> list[dict]:
         print(f"   ⚠️  Reranking error: {e} - using Pinecone order")
         return documents
 
-def query_contract(contract_id: str, question: str, top_k: int = 50) -> list[str]:
+def query_contract(contract_id: str, question: str, top_k: int = 50, metadata_filter: dict = None) -> list[str]:
     """
     Query contract using RAG with improved retrieval and reranking.
     
     Pipeline:
     1. Convert question to embedding (vector)
-    2. Search Pinecone for similar chunks (k=50)
+    2. Search Pinecone for similar chunks (k=50) with optional metadata filtering
     3. Filter chunks by score > 0.5
     4. Rerank with ZeroEntropy for better relevance
     5. Return top 10 chunks with page citations
@@ -174,6 +186,7 @@ def query_contract(contract_id: str, question: str, top_k: int = 50) -> list[str
         contract_id: The contract to search
         question: The user's question
         top_k: Number of candidates to retrieve (default: 50)
+        metadata_filter: Optional Pinecone metadata filter (e.g., {"primary_category": {"$in": ["financial"]}})
     
     Returns:
         List of relevant text chunks with page citations
@@ -188,10 +201,17 @@ def query_contract(contract_id: str, question: str, top_k: int = 50) -> list[str
     
     # Step 2: Query Pinecone with many candidates (cast wide net)
     print(f"  🔎 Searching Pinecone (k={top_k})...")
+    
+    # Build the filter - start with contract_id, add metadata filter if provided
+    pinecone_filter = {"contract_id": contract_id}
+    if metadata_filter:
+        pinecone_filter.update(metadata_filter)
+        print(f"  🎯 Using metadata filter: {metadata_filter}")
+    
     results = index.query(
         vector=question_embedding,
         top_k=top_k,  # Get 50 candidates
-        filter={"contract_id": contract_id},
+        filter=pinecone_filter,
         include_metadata=True
     )
     
@@ -247,7 +267,7 @@ def generate_response(prompt: str) -> str:
     """Generate AI response using OpenAI."""
     client = get_openai_client()
     response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
+        model="gpt-4o",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.7
     )

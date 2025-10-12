@@ -1,0 +1,166 @@
+# Database Operations for Contracts
+# Simple CRUD operations using Supabase
+
+from typing import Optional, List, Dict
+from datetime import datetime
+from supabase_client import get_supabase_client
+
+def create_contract(
+    contract_id: str,
+    filename: str,
+    storage_path: str,
+    file_hash: str,
+    file_size: int
+) -> Dict:
+    """
+    Create a new contract record in database.
+    
+    Returns: Created contract record
+    """
+    supabase = get_supabase_client()
+    
+    data = {
+        "id": contract_id,
+        "filename": filename,
+        "original_filename": filename,
+        "storage_path": storage_path,
+        "file_hash": file_hash,
+        "file_size_bytes": file_size,
+        "status": "processing",
+        "uploaded_at": datetime.now().isoformat()
+    }
+    
+    result = supabase.table("contracts").insert(data).execute()
+    return result.data[0] if result.data else None
+
+def update_contract_status(
+    contract_id: str,
+    status: str,
+    error: Optional[str] = None
+) -> None:
+    """Update contract processing status."""
+    supabase = get_supabase_client()
+    
+    update_data = {
+        "status": status,
+        "processed_at": datetime.now().isoformat()
+    }
+    
+    if error:
+        update_data["processing_error"] = error
+    
+    supabase.table("contracts").update(update_data).eq("id", contract_id).execute()
+
+def save_contract_analysis(
+    contract_id: str,
+    analysis_results: Dict,
+    validation: Dict
+) -> None:
+    """Save comprehensive analysis results (7 types)."""
+    supabase = get_supabase_client()
+    
+    data = {
+        "contract_id": contract_id,
+        "compliance_checklist": analysis_results.get("compliance_checklist"),
+        "clause_summaries": analysis_results.get("clause_summaries"),
+        "scope_alignment": analysis_results.get("scope_alignment"),
+        "completeness_check": analysis_results.get("completeness_check"),
+        "timeline_milestones": analysis_results.get("timeline_milestones"),
+        "financial_risks": analysis_results.get("financial_risks"),
+        "audit_trail": analysis_results.get("audit_trail"),
+        "validation": validation
+    }
+    
+    # Upsert (insert or update) - match on contract_id
+    supabase.table("contract_analyses").upsert(data, on_conflict="contract_id").execute()
+
+def save_risk_analysis(
+    contract_id: str,
+    risk_results: Dict
+) -> None:
+    """Save risk detection results."""
+    supabase = get_supabase_client()
+    
+    data = {
+        "contract_id": contract_id,
+        "summary": risk_results.get("summary", {}),
+        "risks_by_severity": risk_results.get("risks_by_severity", {}),
+        "all_risks": risk_results.get("all_risks", []),
+        "risks_checked": risk_results.get("summary", {}).get("total_risks_checked", 0)
+    }
+    
+    # Upsert (insert or update) - match on contract_id
+    supabase.table("risk_analyses").upsert(data, on_conflict="contract_id").execute()
+
+def get_contract_complete(contract_id: str) -> Optional[Dict]:
+    """
+    Get contract with all analyses using the view.
+    
+    Returns: Complete contract data or None if not found
+    """
+    supabase = get_supabase_client()
+    
+    result = supabase.from_("contract_complete").select("*").eq("id", contract_id).execute()
+    
+    return result.data[0] if result.data else None
+
+def list_all_contracts() -> List[Dict]:
+    """List all contracts (not deleted) with summary info."""
+    supabase = get_supabase_client()
+    
+    result = supabase.from_("contracts_dashboard").select("*").execute()
+    
+    return result.data if result.data else []
+
+def check_duplicate_by_hash(file_hash: str) -> Optional[str]:
+    """
+    Check if a file with this hash already exists.
+    
+    Returns: Contract ID if duplicate found, None otherwise
+    """
+    supabase = get_supabase_client()
+    
+    # Use the stored function
+    result = supabase.rpc("check_duplicate_contract", {"file_hash_input": file_hash}).execute()
+    
+    return result.data if result.data else None
+
+def save_user_question(
+    contract_id: str,
+    question: str,
+    answer: str,
+    chunks_used: Optional[List] = None
+) -> None:
+    """Save a user question and answer to history."""
+    supabase = get_supabase_client()
+    
+    data = {
+        "contract_id": contract_id,
+        "question": question,
+        "answer": answer,
+        "chunks_used": chunks_used or []
+    }
+    
+    supabase.table("user_questions").insert(data).execute()
+
+def get_contract_questions(contract_id: str) -> List[Dict]:
+    """Get all questions asked about a contract."""
+    supabase = get_supabase_client()
+    
+    result = supabase.table("user_questions")\
+        .select("*")\
+        .eq("contract_id", contract_id)\
+        .order("asked_at", desc=True)\
+        .execute()
+    
+    return result.data if result.data else []
+
+def update_pinecone_status(contract_id: str, indexed: bool = True) -> None:
+    """Mark contract as indexed in Pinecone."""
+    supabase = get_supabase_client()
+    
+    supabase.table("contracts")\
+        .update({"pinecone_indexed": indexed})\
+        .eq("id", contract_id)\
+        .execute()
+
