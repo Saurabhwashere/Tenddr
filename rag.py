@@ -333,3 +333,49 @@ def generate_response(prompt: str) -> str:
         temperature=0.7
     )
     return response.choices[0].message.content
+
+def delete_from_pinecone(contract_id: str) -> bool:
+    """
+    Delete all vectors for a contract from Pinecone.
+    
+    Args:
+        contract_id: The contract ID to delete
+        
+    Returns: True if successful
+    """
+    try:
+        index = get_or_create_index()
+        
+        print(f"🗑️  Deleting vectors for contract {contract_id} from Pinecone...")
+        
+        # Query to get all vector IDs for this contract
+        # We'll use a dummy vector and filter by metadata
+        dummy_vector = [0.0] * 1536  # OpenAI embedding dimension
+        
+        results = index.query(
+            vector=dummy_vector,
+            top_k=10000,  # Max limit to get all vectors
+            filter={"contract_id": contract_id},
+            include_metadata=False
+        )
+        
+        # Extract IDs
+        vector_ids = [match["id"] for match in results["matches"]]
+        
+        if vector_ids:
+            # Delete in batches (Pinecone limit is 1000 per request)
+            batch_size = 1000
+            for i in range(0, len(vector_ids), batch_size):
+                batch = vector_ids[i:i + batch_size]
+                index.delete(ids=batch)
+                print(f"   ✓ Deleted batch {i//batch_size + 1} ({len(batch)} vectors)")
+            
+            print(f"✅ Deleted {len(vector_ids)} vectors from Pinecone")
+        else:
+            print(f"ℹ️  No vectors found for contract {contract_id}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error deleting from Pinecone: {e}")
+        return False

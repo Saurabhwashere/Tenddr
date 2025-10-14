@@ -164,3 +164,67 @@ def update_pinecone_status(contract_id: str, indexed: bool = True) -> None:
         .eq("id", contract_id)\
         .execute()
 
+def delete_contract_and_analyses(contract_id: str) -> bool:
+    """
+    Delete contract and all related data from Supabase.
+    This includes:
+    - Contract record (contracts table)
+    - Risk analysis (risk_analyses table)
+    - Contract analyses (contract_analyses table)
+    - User questions (user_questions table)
+    
+    Returns: True if successful
+    """
+    supabase = get_supabase_client()
+    
+    try:
+        # Delete user questions/Q&A history
+        try:
+            supabase.table("user_questions").delete().eq("contract_id", contract_id).execute()
+            print(f"🗑️  Deleted user questions for contract {contract_id}")
+        except Exception as e:
+            print(f"ℹ️  Skipping user questions deletion: {e}")
+        
+        # Delete risk analysis
+        try:
+            supabase.table("risk_analyses").delete().eq("contract_id", contract_id).execute()
+            print(f"🗑️  Deleted risk analysis for contract {contract_id}")
+        except Exception as e:
+            print(f"ℹ️  Skipping risk analysis deletion: {e}")
+        
+        # Delete contract analyses
+        try:
+            supabase.table("contract_analyses").delete().eq("contract_id", contract_id).execute()
+            print(f"🗑️  Deleted contract analyses for contract {contract_id}")
+        except Exception as e:
+            print(f"ℹ️  Skipping contract analyses deletion: {e}")
+        
+        # Delete main contract record (this should always exist)
+        supabase.table("contracts").delete().eq("id", contract_id).execute()
+        print(f"🗑️  Deleted contract record {contract_id}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error deleting contract from database: {e}")
+        return False
+
+
+def get_contract_storage_path(contract_id: str) -> Optional[str]:
+    """Get the storage path for a contract's PDF."""
+    supabase = get_supabase_client()
+    
+    try:
+        result = supabase.table("contracts")\
+            .select("storage_path")\
+            .eq("id", contract_id)\
+            .execute()
+        
+        if result.data and len(result.data) > 0:
+            return result.data[0].get("storage_path")
+        return None
+        
+    except Exception as e:
+        print(f"❌ Error getting storage path: {e}")
+        return None
+

@@ -418,6 +418,67 @@ async def list_contracts():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error listing contracts: {str(e)}")
 
+@app.delete("/contracts/{contract_id}")
+async def delete_contract(contract_id: str):
+    """
+    Permanently delete a contract and all associated data.
+    
+    This will delete:
+    1. PDF file from Supabase Storage
+    2. All database records (contract, analyses, risks, Q&A)
+    3. All embeddings from Pinecone
+    """
+    try:
+        print(f"\n🗑️  DELETE REQUEST for contract: {contract_id}")
+        
+        # Step 1: Get storage path before deleting from database
+        from database import get_contract_storage_path
+        storage_path = get_contract_storage_path(contract_id)
+        
+        if not storage_path:
+            raise HTTPException(status_code=404, detail="Contract not found")
+        
+        # Step 2: Delete from Pinecone (vector embeddings)
+        from rag import delete_from_pinecone
+        pinecone_deleted = delete_from_pinecone(contract_id)
+        
+        # Step 3: Delete from Supabase Storage (PDF file)
+        from storage import delete_pdf
+        storage_deleted = delete_pdf(storage_path)
+        
+        # Step 4: Delete from Supabase Database (all tables)
+        from database import delete_contract_and_analyses
+        db_deleted = delete_contract_and_analyses(contract_id)
+        
+        # Check if all deletions were successful
+        if db_deleted and storage_deleted and pinecone_deleted:
+            print(f"✅ Successfully deleted contract {contract_id}")
+            return {
+                "success": True,
+                "message": "Contract permanently deleted",
+                "deleted": {
+                    "database": db_deleted,
+                    "storage": storage_deleted,
+                    "pinecone": pinecone_deleted
+                }
+            }
+        else:
+            return {
+                "success": False,
+                "message": "Partial deletion - some operations failed",
+                "deleted": {
+                    "database": db_deleted,
+                    "storage": storage_deleted,
+                    "pinecone": pinecone_deleted
+                }
+            }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error deleting contract: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete contract: {str(e)}")
+
 @app.get("/pdf/{contract_id}")
 async def get_pdf(contract_id: str):
     """Serve PDF file for viewing."""
