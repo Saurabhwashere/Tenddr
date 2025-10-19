@@ -12,64 +12,64 @@ from prompts import (
     AUDIT_TRAIL_PROMPT
 )
 
-def get_context(contract_id: str, query: str) -> str:
+def get_context(contract_id: str, query: str, user_id: str) -> str:
     """
     Get context using RAG only - no fallback.
     Retrieves relevant chunks from entire contract.
     """
-    chunks = query_contract(contract_id, query, top_k=20)
+    chunks = query_contract(contract_id, query, user_id, top_k=20)
     return "\n\n".join(chunks) if chunks else ""
 
-def analyze_compliance(contract_id: str, text: str) -> str:
+def analyze_compliance(contract_id: str, text: str, user_id: str) -> str:
     """Extract compliance checklist using RAG to find info anywhere in contract."""
     query = "compliance requirements mandatory documents licenses certifications eligibility"
-    context = get_context(contract_id, query)
+    context = get_context(contract_id, query, user_id)
     prompt = COMPLIANCE_CHECKLIST_PROMPT.format(contract_text=context)
     return generate_response(prompt)
 
-def analyze_clauses(contract_id: str, text: str) -> str:
+def analyze_clauses(contract_id: str, text: str, user_id: str) -> str:
     """Summarize contract clauses using RAG."""
     query = "contract clauses terms conditions obligations liabilities scope of work"
-    context = get_context(contract_id, query)
+    context = get_context(contract_id, query, user_id)
     prompt = CLAUSE_SUMMARY_PROMPT.format(contract_text=context)
     return generate_response(prompt)
 
-def analyze_scope_alignment(contract_id: str, text: str) -> str:
+def analyze_scope_alignment(contract_id: str, text: str, user_id: str) -> str:
     """Check scope alignment using RAG."""
     query = "scope of work bill of quantities BOQ specifications technical requirements"
-    context = get_context(contract_id, query)
+    context = get_context(contract_id, query, user_id)
     prompt = SCOPE_ALIGNMENT_PROMPT.format(contract_text=context)
     return generate_response(prompt)
 
-def check_completeness(contract_id: str, text: str) -> str:
+def check_completeness(contract_id: str, text: str, user_id: str) -> str:
     """Check submission completeness using RAG."""
     query = "submission requirements documents formats annexures appendices schedules"
-    context = get_context(contract_id, query)
+    context = get_context(contract_id, query, user_id)
     prompt = COMPLETENESS_CHECK_PROMPT.format(contract_text=context)
     return generate_response(prompt)
 
-def extract_timeline(contract_id: str, text: str) -> str:
+def extract_timeline(contract_id: str, text: str, user_id: str) -> str:
     """Extract timeline using RAG."""
     query = "timeline milestones deadlines schedule completion date delivery period"
-    context = get_context(contract_id, query)
+    context = get_context(contract_id, query, user_id)
     prompt = TIMELINE_PROMPT.format(contract_text=context)
     return generate_response(prompt)
 
-def analyze_financial_risks(contract_id: str, text: str) -> str:
+def analyze_financial_risks(contract_id: str, text: str, user_id: str) -> str:
     """Analyze financial risks using RAG."""
     query = "payment price cost penalties liquidated damages financial obligations security"
-    context = get_context(contract_id, query)
+    context = get_context(contract_id, query, user_id)
     prompt = FINANCIAL_RISK_PROMPT.format(contract_text=context)
     return generate_response(prompt)
 
-def generate_audit_trail(contract_id: str, text: str) -> str:
+def generate_audit_trail(contract_id: str, text: str, user_id: str) -> str:
     """Generate audit trail using RAG."""
     query = "version amendments modifications changes revisions audit history"
-    context = get_context(contract_id, query)
+    context = get_context(contract_id, query, user_id)
     prompt = AUDIT_TRAIL_PROMPT.format(contract_text=context)
     return generate_response(prompt)
 
-def run_comprehensive_analysis(contract_id: str, text: str) -> dict:
+def run_comprehensive_analysis(contract_id: str, text: str, user_id: str) -> dict:
     """
     Run all 7 analyses using RAG for better accuracy.
     
@@ -89,25 +89,25 @@ def run_comprehensive_analysis(contract_id: str, text: str) -> dict:
     
     # Run each analysis with RAG
     print("  ✓ Analyzing compliance checklist...")
-    results["compliance_checklist"] = analyze_compliance(contract_id, text)
+    results["compliance_checklist"] = analyze_compliance(contract_id, text, user_id)
     
     print("  ✓ Analyzing contract clauses...")
-    results["clause_summaries"] = analyze_clauses(contract_id, text)
+    results["clause_summaries"] = analyze_clauses(contract_id, text, user_id)
     
     print("  ✓ Checking scope alignment...")
-    results["scope_alignment"] = analyze_scope_alignment(contract_id, text)
+    results["scope_alignment"] = analyze_scope_alignment(contract_id, text, user_id)
     
     print("  ✓ Verifying submission completeness...")
-    results["completeness_check"] = check_completeness(contract_id, text)
+    results["completeness_check"] = check_completeness(contract_id, text, user_id)
     
     print("  ✓ Extracting timeline & milestones...")
-    results["timeline_milestones"] = extract_timeline(contract_id, text)
+    results["timeline_milestones"] = extract_timeline(contract_id, text, user_id)
     
     print("  ✓ Analyzing financial risks...")
-    results["financial_risks"] = analyze_financial_risks(contract_id, text)
+    results["financial_risks"] = analyze_financial_risks(contract_id, text, user_id)
     
     print("  ✓ Generating audit trail...")
-    results["audit_trail"] = generate_audit_trail(contract_id, text)
+    results["audit_trail"] = generate_audit_trail(contract_id, text, user_id)
     
     # Simple validation: check all sections have content
     validation = validate_analysis_completeness(results)

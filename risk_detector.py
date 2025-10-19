@@ -13,6 +13,7 @@ from risk_catalog import RISK_DEFINITIONS
 def detect_risk_with_llm(
     contract_id: str,
     risk_definition: Dict,
+    user_id: str,
     model: str = "gpt-4o"
 ) -> Dict:
     """
@@ -45,7 +46,7 @@ def detect_risk_with_llm(
     }
     
     print(f"     🎯 Filtering by category: {risk_definition.get('category')}, clause_type: {risk_definition.get('clause_type')}")
-    relevant_chunks = query_contract(contract_id, search_query, top_k=30, metadata_filter=metadata_filter)
+    relevant_chunks = query_contract(contract_id, search_query, user_id, top_k=30, metadata_filter=metadata_filter)
 
     # Optimization: If no relevant chunks found, skip LLM call
     if not relevant_chunks or len(relevant_chunks) == 0:
@@ -170,7 +171,7 @@ If the risk is NOT found, return:
         }
 
 
-def run_risk_analysis(contract_id: str, model: str = "gpt-4o") -> Dict:
+def run_risk_analysis(contract_id: str, user_id: str, model: str = "gpt-4o") -> Dict:
     """
     Run all risk detection checks on a contract using RAG.
     NOW WITH PARALLEL PROCESSING FOR 5x SPEEDUP!
@@ -201,7 +202,7 @@ def run_risk_analysis(contract_id: str, model: str = "gpt-4o") -> Dict:
     # Run detection for all risks IN PARALLEL (5 at a time to avoid rate limits)
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         future_to_risk = {
-            executor.submit(detect_risk_with_llm, contract_id, risk_def, model): (i, risk_def)
+            executor.submit(detect_risk_with_llm, contract_id, risk_def, user_id, model): (i, risk_def)
             for i, risk_def in enumerate(RISK_DEFINITIONS, 1)
         }
         

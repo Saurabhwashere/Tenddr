@@ -1,10 +1,11 @@
 # FastAPI app with Supabase integration
 import os
 import uuid
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
+from typing import Optional
 import io
 
 from pdf_processor import extract_text_from_pdf, extract_text_with_pages, create_chunks_with_pages, create_enhanced_chunks_with_pages
@@ -21,6 +22,7 @@ from database import (
     save_risk_analysis,
     get_contract_complete,
     list_all_contracts,
+    list_contracts_by_user,
     check_duplicate_by_hash,
     save_user_question,
     update_pinecone_status
@@ -47,8 +49,15 @@ class QuestionRequest(BaseModel):
     question: str
 
 @app.post("/upload")
-async def upload_contract(file: UploadFile = File(...)):
-    """Upload and process a PDF contract with Supabase storage."""
+async def upload_contract(
+    file: UploadFile = File(...),
+    user_id: Optional[str] = Header(None, alias="X-User-Id")
+):
+    """Upload and process a PDF contract with user isolation."""
+    
+    # Validate user_id is provided
+    if not user_id:
+        raise HTTPException(status_code=400, detail="X-User-Id header is required")
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files allowed")
     
@@ -59,8 +68,8 @@ async def upload_contract(file: UploadFile = File(...)):
     # Calculate file hash for duplicate detection
     file_hash = calculate_file_hash(content)
     
-    # Check if file already exists
-    existing_id = check_duplicate_by_hash(file_hash)
+    # Check if file already exists for this user
+    existing_id = check_duplicate_by_hash(file_hash, user_id)
     if existing_id:
         print(f"📋 Duplicate detected! Returning existing contract: {existing_id}")
         return {
@@ -72,8 +81,8 @@ async def upload_contract(file: UploadFile = File(...)):
     # Generate unique ID
     contract_id = str(uuid.uuid4())
     
-    # Upload to Supabase Storage
-    storage_path = upload_pdf(contract_id, content, file.filename)
+    # Upload to Supabase Storage with user isolation
+    storage_path = upload_pdf(contract_id, content, file.filename, user_id)
     
     # Create contract record in database
     create_contract(
@@ -81,7 +90,8 @@ async def upload_contract(file: UploadFile = File(...)):
         filename=file.filename,
         storage_path=storage_path,
         file_hash=file_hash,
-        file_size=file_size
+        file_size=file_size,
+        user_id=user_id
     )
     
     # Save file temporarily for processing
@@ -99,8 +109,8 @@ async def upload_contract(file: UploadFile = File(...)):
         # Create enhanced chunks with metadata for better filtering
         chunks = create_enhanced_chunks_with_pages(pages_data, chunk_size=500, overlap=100)
         
-        # Store in Pinecone
-        store_in_pinecone(contract_id, chunks)
+        # Store in Pinecone with user isolation
+        store_in_pinecone(contract_id, chunks, user_id)
         update_pinecone_status(contract_id, indexed=True)
 
         # Default empty risk analysis (used if risk detection fails)
@@ -126,7 +136,7 @@ async def upload_contract(file: UploadFile = File(...)):
         # Run automated risk detection (uses RAG to search entire contract)
         try:
             print(f"🔍 Running automated risk detection...")
-            risk_results = run_risk_analysis(contract_id, model="gpt-4o")
+            risk_results = run_risk_analysis(contract_id, user_id, model="gpt-4o")
         except Exception as e:
             # If risk detection fails, log error but continue with other analyses
             print(f"⚠️ Risk detection failed: {e}")
@@ -135,17 +145,18 @@ async def upload_contract(file: UploadFile = File(...)):
         # Run comprehensive analysis (all 7 types) using RAG
         print(f"📄 Analyzing contract: {file.filename}")
         # Use RAG-only (no full text) to avoid 300K token limit
-        analysis_results = run_comprehensive_analysis(contract_id, "")
+        analysis_results = run_comprehensive_analysis(contract_id, "", user_id)
         
         # Save analysis results to database
         save_contract_analysis(
             contract_id=contract_id,
             analysis_results=analysis_results,
-            validation=analysis_results["validation"]
+            validation=analysis_results["validation"],
+            user_id=user_id
         )
         
         # Save risk analysis to database
-        save_risk_analysis(contract_id=contract_id, risk_results=risk_results)
+        save_risk_analysis(contract_id=contract_id, risk_results=risk_results, user_id=user_id)
         
         # Update contract status to completed
         update_contract_status(contract_id, status="completed")
@@ -256,7 +267,7 @@ async def reanalyze_contract(contract_id: str):
         # Run automated risk detection
         try:
             print(f"🔍 Re-running automated risk detection...")
-            risk_results = run_risk_analysis(contract_id, model="gpt-4o")
+            risk_results = run_risk_analysis(contract_id, user_id, model="gpt-4o")
         except Exception as e:
             print(f"⚠️ Risk detection failed: {e}")
             risk_results = empty_risk_analysis
@@ -264,7 +275,7 @@ async def reanalyze_contract(contract_id: str):
         # Run comprehensive analysis
         print(f"📄 Re-analyzing contract...")
         # Use RAG-only (no full text) to avoid 300K token limit
-        analysis_results = run_comprehensive_analysis(contract_id, "")
+        analysis_results = run_comprehensive_analysis(contract_id, "", user_id)
         
         # Save updated analysis results
         save_contract_analysis(
@@ -361,8 +372,12 @@ async def get_results(contract_id: str):
     }
 
 @app.post("/qa/{contract_id}")
-async def ask_question(contract_id: str, request: QuestionRequest):
+async def ask_question(contract_id: str, request: QuestionRequest, user_id: Optional[str] = Header(None, alias="X-User-Id")):
     """Ask a question about a contract and save to history."""
+    
+    # Validate user_id is provided
+    if not user_id:
+        raise HTTPException(status_code=400, detail="X-User-Id header is required")
     try:
         # Verify contract exists
         contract = get_contract_complete(contract_id)
@@ -370,7 +385,7 @@ async def ask_question(contract_id: str, request: QuestionRequest):
             raise HTTPException(status_code=404, detail="Contract not found")
         
         # Get relevant context from Pinecone
-        context_chunks = query_contract(contract_id, request.question)
+        context_chunks = query_contract(contract_id, request.question, user_id)
         
         # Check if we got any results
         if not context_chunks:
@@ -406,11 +421,37 @@ async def ask_question(contract_id: str, request: QuestionRequest):
 async def root():
     return {"message": "Contract Analysis API"}
 
-@app.get("/contracts")
-async def list_contracts():
-    """List all contracts in database with summary info."""
+@app.get("/debug/user")
+async def debug_user(user_id: Optional[str] = Header(None, alias="X-User-Id")):
+    """Debug endpoint to check user_id and list all contracts."""
+    if not user_id:
+        return {"error": "X-User-Id header is required"}
+    
     try:
-        contracts = list_all_contracts()
+        # Get all contracts (for debugging)
+        all_contracts = list_all_contracts()
+        user_contracts = list_contracts_by_user(user_id)
+        
+        return {
+            "user_id": user_id,
+            "total_contracts": len(all_contracts),
+            "user_contracts": len(user_contracts),
+            "all_contracts": [{"id": c["id"], "uploaded_by": c.get("uploaded_by"), "filename": c["filename"]} for c in all_contracts],
+            "user_contracts_data": [{"id": c["id"], "uploaded_by": c.get("uploaded_by"), "filename": c["filename"]} for c in user_contracts]
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/contracts")
+async def list_contracts(user_id: Optional[str] = Header(None, alias="X-User-Id")):
+    """List contracts for authenticated user only."""
+    
+    # Validate user_id is provided
+    if not user_id:
+        raise HTTPException(status_code=400, detail="X-User-Id header is required")
+    
+    try:
+        contracts = list_contracts_by_user(user_id)
         return {
             "contracts": contracts,
             "count": len(contracts)

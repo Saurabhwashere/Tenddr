@@ -10,7 +10,8 @@ def create_contract(
     filename: str,
     storage_path: str,
     file_hash: str,
-    file_size: int
+    file_size: int,
+    user_id: str
 ) -> Dict:
     """
     Create a new contract record in database.
@@ -27,6 +28,7 @@ def create_contract(
         "file_hash": file_hash,
         "file_size_bytes": file_size,
         "status": "processing",
+        "uploaded_by": user_id,
         "uploaded_at": datetime.now().isoformat()
     }
     
@@ -54,13 +56,15 @@ def update_contract_status(
 def save_contract_analysis(
     contract_id: str,
     analysis_results: Dict,
-    validation: Dict
+    validation: Dict,
+    user_id: str
 ) -> None:
     """Save comprehensive analysis results (7 types)."""
     supabase = get_supabase_client()
     
     data = {
         "contract_id": contract_id,
+        "user_id": user_id,
         "compliance_checklist": analysis_results.get("compliance_checklist"),
         "clause_summaries": analysis_results.get("clause_summaries"),
         "scope_alignment": analysis_results.get("scope_alignment"),
@@ -76,13 +80,15 @@ def save_contract_analysis(
 
 def save_risk_analysis(
     contract_id: str,
-    risk_results: Dict
+    risk_results: Dict,
+    user_id: str
 ) -> None:
     """Save risk detection results."""
     supabase = get_supabase_client()
     
     data = {
         "contract_id": contract_id,
+        "user_id": user_id,
         "summary": risk_results.get("summary", {}),
         "risks_by_severity": risk_results.get("risks_by_severity", {}),
         "all_risks": risk_results.get("all_risks", []),
@@ -112,18 +118,36 @@ def list_all_contracts() -> List[Dict]:
     
     return result.data if result.data else []
 
-def check_duplicate_by_hash(file_hash: str) -> Optional[str]:
+def list_contracts_by_user(user_id: str) -> List[Dict]:
+    """List contracts for a specific user."""
+    supabase = get_supabase_client()
+    
+    result = supabase.table("contracts")\
+        .select("*")\
+        .eq("uploaded_by", user_id)\
+        .is_("deleted_at", "null")\
+        .order("uploaded_at", desc=True)\
+        .execute()
+    
+    return result.data if result.data else []
+
+def check_duplicate_by_hash(file_hash: str, user_id: str) -> Optional[str]:
     """
-    Check if a file with this hash already exists.
+    Check if a file with this hash already exists for this user.
     
     Returns: Contract ID if duplicate found, None otherwise
     """
     supabase = get_supabase_client()
     
-    # Use the stored function
-    result = supabase.rpc("check_duplicate_contract", {"file_hash_input": file_hash}).execute()
+    result = supabase.table("contracts")\
+        .select("id")\
+        .eq("file_hash", file_hash)\
+        .eq("uploaded_by", user_id)\
+        .is_("deleted_at", "null")\
+        .limit(1)\
+        .execute()
     
-    return result.data if result.data else None
+    return result.data[0]["id"] if result.data else None
 
 def save_user_question(
     contract_id: str,

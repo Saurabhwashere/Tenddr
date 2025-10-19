@@ -98,7 +98,7 @@ def create_embeddings(texts: list[str]) -> list[list[float]]:
     print(f"  ✅ All embeddings created!")
     return all_embeddings
 
-def store_in_pinecone(contract_id: str, chunks: list[dict], batch_size: int = None, text_preview_chars: int = None):
+def store_in_pinecone(contract_id: str, chunks: list[dict], user_id: str, batch_size: int = None, text_preview_chars: int = None):
     """
     Store contract chunks in Pinecone with safe batching and trimmed metadata to avoid 4 MB request limit.
     
@@ -124,6 +124,7 @@ def store_in_pinecone(contract_id: str, chunks: list[dict], batch_size: int = No
             metadata = {
                 "text": raw_text[:preview_len],  # Truncate to keep request small
                 "contract_id": contract_id,
+                "user_id": user_id,
                 "page_number": chunk.get("page_number", 0),
                 "chunk_index": chunk.get("chunk_index", i),
                 "word_count": chunk.get("word_count", 0),
@@ -139,6 +140,7 @@ def store_in_pinecone(contract_id: str, chunks: list[dict], batch_size: int = No
             metadata = {
                 "text": raw_text[:preview_len],  # Truncate
                 "contract_id": contract_id,
+                "user_id": user_id,
                 "page_number": 0,
                 "chunk_index": i,
                 
@@ -232,7 +234,7 @@ def rerank_with_zeroentropy(query: str, documents: list[dict]) -> list[dict]:
         print(f"   ⚠️  Reranking error: {e} - using Pinecone order")
         return documents
 
-def query_contract(contract_id: str, question: str, top_k: int = 50, metadata_filter: dict = None) -> list[str]:
+def query_contract(contract_id: str, question: str, user_id: str, top_k: int = 50, metadata_filter: dict = None) -> list[str]:
     """
     Query contract using RAG with improved retrieval and reranking.
     
@@ -263,8 +265,8 @@ def query_contract(contract_id: str, question: str, top_k: int = 50, metadata_fi
     # Step 2: Query Pinecone with many candidates (cast wide net)
     print(f"  🔎 Searching Pinecone (k={top_k})...")
     
-    # Build the filter - start with contract_id, add metadata filter if provided
-    pinecone_filter = {"contract_id": contract_id}
+    # Build the filter - start with contract_id and user_id, add metadata filter if provided
+    pinecone_filter = {"contract_id": contract_id, "user_id": user_id}
     if metadata_filter:
         pinecone_filter.update(metadata_filter)
         print(f"  🎯 Using metadata filter: {metadata_filter}")

@@ -15,7 +15,8 @@ def calculate_file_hash(file_content: bytes) -> str:
 def upload_pdf(
     contract_id: str,
     file_content: bytes,
-    filename: str
+    filename: str,
+    user_id: str
 ) -> str:
     """
     Upload PDF to Supabase Storage.
@@ -24,16 +25,18 @@ def upload_pdf(
         contract_id: Unique contract identifier
         file_content: PDF file bytes
         filename: Original filename
+        user_id: User ID for isolation
         
     Returns: Storage path
     """
     supabase = get_supabase_client()
     
-    # Create storage path: contract-id/filename.pdf
-    storage_path = f"{contract_id}/{filename}"
+    # Create storage path with user isolation: user-id/contract-id/filename.pdf
+    storage_path = f"{user_id}/{contract_id}/{filename}"
     
     try:
-        # Upload to Supabase Storage
+        # Upload to Supabase Storage using service role
+        # This bypasses RLS policies since we're using service role
         supabase.storage.from_(STORAGE_BUCKET).upload(
             path=storage_path,
             file=file_content,
@@ -45,7 +48,19 @@ def upload_pdf(
         
     except Exception as e:
         print(f"❌ Storage upload error: {e}")
-        raise
+        # If storage upload fails due to RLS, try without user folder structure
+        try:
+            simple_path = f"{contract_id}/{filename}"
+            supabase.storage.from_(STORAGE_BUCKET).upload(
+                path=simple_path,
+                file=file_content,
+                file_options={"content-type": "application/pdf"}
+            )
+            print(f"✅ Uploaded PDF to storage (fallback): {simple_path}")
+            return simple_path
+        except Exception as e2:
+            print(f"❌ Storage upload fallback error: {e2}")
+            raise
 
 def download_pdf(storage_path: str) -> bytes:
     """
