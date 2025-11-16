@@ -241,7 +241,7 @@ async def reanalyze_contract(contract_id: str):
         
         # Store new chunks with updated metadata
         print("💾 Storing new chunks with updated metadata...")
-        store_in_pinecone(contract_id, chunks)
+        store_in_pinecone(contract_id, chunks, contract["uploaded_by"])
         update_pinecone_status(contract_id, indexed=True)
         
         # Default empty risk analysis (used if risk detection fails)
@@ -267,7 +267,7 @@ async def reanalyze_contract(contract_id: str):
         # Run automated risk detection
         try:
             print(f"🔍 Re-running automated risk detection...")
-            risk_results = run_risk_analysis(contract_id, user_id, model="gpt-4o")
+            risk_results = run_risk_analysis(contract_id, contract["uploaded_by"], model="gpt-4o")
         except Exception as e:
             print(f"⚠️ Risk detection failed: {e}")
             risk_results = empty_risk_analysis
@@ -275,17 +275,18 @@ async def reanalyze_contract(contract_id: str):
         # Run comprehensive analysis
         print(f"📄 Re-analyzing contract...")
         # Use RAG-only (no full text) to avoid 300K token limit
-        analysis_results = run_comprehensive_analysis(contract_id, "", user_id)
+        analysis_results = run_comprehensive_analysis(contract_id, "", contract["uploaded_by"])
         
         # Save updated analysis results
         save_contract_analysis(
             contract_id=contract_id,
             analysis_results=analysis_results,
-            validation=analysis_results["validation"]
+            validation=analysis_results["validation"],
+            user_id=contract["uploaded_by"]
         )
         
         # Save updated risk analysis
-        save_risk_analysis(contract_id, risk_results)
+        save_risk_analysis(contract_id, risk_results, contract["uploaded_by"])
         
         # Update status to completed
         update_contract_status(contract_id, status="completed")
