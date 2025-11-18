@@ -1,6 +1,5 @@
 # Contract Analysis Functions
 # Simple, clear functions for comprehensive contract analysis
-
 from rag import generate_response, query_contract
 from prompts import (
     COMPLIANCE_CHECKLIST_PROMPT,
@@ -17,7 +16,7 @@ def get_context(contract_id: str, query: str, user_id: str) -> str:
     Get context using RAG only - no fallback.
     Retrieves relevant chunks from entire contract.
     """
-    chunks = query_contract(contract_id, query, user_id, top_k=20)
+    chunks = query_contract(contract_id, query, user_id, top_k=50)
     return "\n\n".join(chunks) if chunks else ""
 
 def analyze_compliance(contract_id: str, text: str, user_id: str) -> str:
@@ -56,9 +55,31 @@ def extract_timeline(contract_id: str, text: str, user_id: str) -> str:
     return generate_response(prompt)
 
 def analyze_financial_risks(contract_id: str, text: str, user_id: str) -> str:
-    """Analyze financial risks using RAG."""
-    query = "payment price cost penalties liquidated damages financial obligations security"
-    context = get_context(contract_id, query, user_id)
+    """
+    Analyze financial risks using hybrid multi-query RAG.
+    Uses LLM-based query decomposition + domain knowledge for comprehensive coverage.
+    """
+    from query_expansion import hybrid_multi_query_retrieval
+    
+    # Use hybrid approach with a comprehensive financial question
+    financial_question = """What are all the financial provisions in this contract including: 
+    payment terms and schedules, penalties and liquidated damages on the contractor, 
+    penalties or interest on delayed payments by the client, withholding and lien rights, 
+    retention provisions, audit and overpayment recovery rights, and any cross-contract 
+    lien or offset provisions?"""
+    
+    print("  💎 Using HYBRID multi-query strategy for comprehensive financial analysis...")
+    chunks = hybrid_multi_query_retrieval(
+        contract_id, 
+        financial_question, 
+        user_id, 
+        top_k_per_query=12
+    )
+    
+    context = "\n\n".join(chunks[:50]) if chunks else ""
+    
+    print(f"  ✓ Final context: {len(chunks[:50])} unique chunks")
+    
     prompt = FINANCIAL_RISK_PROMPT.format(contract_text=context)
     return generate_response(prompt)
 

@@ -10,7 +10,7 @@ INDEX_NAME = "contracts"
 
 # Pinecone upsert configuration to avoid 4 MB request limit
 DEFAULT_UPSERT_BATCH_SIZE = int(os.getenv("PINECONE_UPSERT_BATCH_SIZE", "50"))
-DEFAULT_TEXT_PREVIEW_CHARS = int(os.getenv("PINECONE_TEXT_PREVIEW_CHARS", "2000"))
+DEFAULT_TEXT_PREVIEW_CHARS = int(os.getenv("PINECONE_TEXT_PREVIEW_CHARS", "5000"))  # Increased from 2000 to 5000
 
 # Initialize clients lazily
 _openai_client = None
@@ -168,71 +168,97 @@ def store_in_pinecone(contract_id: str, chunks: list[dict], user_id: str, batch_
 
 def rerank_with_zeroentropy(query: str, documents: list[dict]) -> list[dict]:
     """
-    Rerank documents using ZeroEntropy SDK.
+    Smart reranking that preserves high-confidence Pinecone results.
     
-    How it works:
-    1. Uses ZeroEntropy Python SDK (not REST API)
-    2. API scores each document for relevance to query
-    3. Returns documents reordered by relevance (best first)
+    Strategy:
+    1. Separate documents by Pinecone confidence level
+    2. Keep high-confidence docs (>0.78) as-is
+    3. Rerank medium/low confidence docs with ZeroEntropy
+    4. Merge results with diversity (different pages)
     
     Args:
         query: The user's question
-        documents: List of dicts with 'text' and 'page_number'
+        documents: List of dicts with 'text', 'page_number', and 'pinecone_score'
     
     Returns:
-        Reranked list of documents with scores
+        Reranked list with best results first
     """
     import os
     
-    api_key = os.getenv("ZEROENTROPY_API_KEY")
-    if not api_key:
-        # If no API key, return documents as-is (no reranking)
-        print("   ⚠️  No ZeroEntropy API key - using Pinecone order")
-        return documents
+    if not documents:
+        return []
     
-    try:
-        # Import and initialize ZeroEntropy SDK
-        from zeroentropy import ZeroEntropy
-        
-        zclient = ZeroEntropy(api_key=api_key)
-        
-        # Extract just the text for reranking
-        doc_texts = [doc["text"] for doc in documents]
-        
-        print(f"   🔄 Sending {len(doc_texts)} docs to ZeroEntropy...")
-        
-        # Call rerank using the SDK
-        response = zclient.models.rerank(
-            model="zerank-1",  # Correct model name from docs
-            query=query,
-            documents=doc_texts
-        )
-        
-        # Reorder documents based on reranking scores
-        reranked = []
-        for result in response.results:
-            # result has: index, document, relevance_score
-            idx = result.index
-            score = result.relevance_score
+    # Step 1: Separate by Pinecone confidence
+    high_conf = [d for d in documents if d.get("pinecone_score", 0) > 0.78]
+    medium_conf = [d for d in documents if 0.65 < d.get("pinecone_score", 0) <= 0.78]
+    low_conf = [d for d in documents if d.get("pinecone_score", 0) <= 0.65]
+    
+    print(f"   📊 Confidence split: {len(high_conf)} high (>0.78), {len(medium_conf)} medium, {len(low_conf)} low")
+    
+    # Step 2: Rerank medium and low confidence docs
+    to_rerank = medium_conf + low_conf
+    reranked = []
+    
+    api_key = os.getenv("ZEROENTROPY_API_KEY")
+    if api_key and to_rerank:
+        try:
+            from zeroentropy import ZeroEntropy
             
-            if idx < len(documents):
-                doc = documents[idx].copy()
-                doc["rerank_score"] = score
-                reranked.append(doc)
-        
-        if reranked:
-            print(f"   ✅ Reranked! Top score: {reranked[0].get('rerank_score', 'N/A')}")
-            return reranked[:20]  # Return top 10
-        else:
-            print(f"   ⚠️  No results after reranking - using Pinecone order")
-            return documents
+            zclient = ZeroEntropy(api_key=api_key)
+            doc_texts = [doc["text"] for doc in to_rerank]
             
-    except ImportError:
-        print(f"   ⚠️  ZeroEntropy SDK not installed - run: pip install zeroentropy")
-        return documents
-    except Exception as e:
-        print(f"   ⚠️  Reranking error: {e} - using Pinecone order")
-        return documents
+            print(f"   🔄 Reranking {len(doc_texts)} medium/low confidence docs...")
+            
+            response = zclient.models.rerank(
+                model="zerank-1",
+                query=query,
+                documents=doc_texts
+            )
+            
+            for result in response.results:
+                idx = result.index
+                score = result.relevance_score
+                
+                if idx < len(to_rerank):
+                    doc = to_rerank[idx].copy()
+                    doc["rerank_score"] = score
+                    reranked.append(doc)
+            
+            print(f"   ✅ Reranked {len(reranked)} docs")
+            
+        except ImportError:
+            print(f"   ⚠️  ZeroEntropy SDK not installed - keeping Pinecone order")
+            reranked = to_rerank
+        except Exception as e:
+            print(f"   ⚠️  Reranking error: {e} - keeping Pinecone order")
+            reranked = to_rerank
+    else:
+        if not api_key:
+            print("   ⚠️  No ZeroEntropy API key - keeping Pinecone order")
+        reranked = to_rerank
+    
+    # Step 3: Merge with diversity - ensure different pages
+    final = []
+    seen_pages = set()
+    
+    # Add high confidence first (they're already good!)
+    for doc in sorted(high_conf, key=lambda x: x.get("pinecone_score", 0), reverse=True):
+        page = doc.get("page_number", 0)
+        if page not in seen_pages or len(final) < 10:  # Allow some duplicates in first 10
+            final.append(doc)
+            seen_pages.add(page)
+    
+    # Add reranked docs with diversity
+    for doc in reranked:
+        if len(final) >= 40:  # Increased from 30 to 40 for better coverage
+            break
+        page = doc.get("page_number", 0)
+        if page not in seen_pages:
+            final.append(doc)
+            seen_pages.add(page)
+    
+    print(f"   🎯 Final: {len(final)} diverse chunks from {len(seen_pages)} pages")
+    return final
 
 def query_contract(contract_id: str, question: str, user_id: str, top_k: int = 50, metadata_filter: dict = None) -> list[str]:
     """
@@ -304,7 +330,7 @@ def query_contract(contract_id: str, question: str, user_id: str, top_k: int = 5
     
     # Step 5: Format with page numbers
     relevant_chunks = []
-    for i, doc in enumerate(reranked_docs[:20]):  # Top 10 after reranking
+    for i, doc in enumerate(reranked_docs[:30]):  # Top 30 after reranking for better coverage
         text = doc["text"]
         page_num = doc.get("page_number", 0)
         pinecone_score = doc.get("pinecone_score", 0)

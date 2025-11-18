@@ -374,7 +374,10 @@ async def get_results(contract_id: str):
 
 @app.post("/qa/{contract_id}")
 async def ask_question(contract_id: str, request: QuestionRequest, user_id: Optional[str] = Header(None, alias="X-User-Id")):
-    """Ask a question about a contract and save to history."""
+    """
+    Ask a question about a contract and save to history.
+    Uses hybrid multi-query strategy for comprehensive answers.
+    """
     
     # Validate user_id is provided
     if not user_id:
@@ -385,8 +388,16 @@ async def ask_question(contract_id: str, request: QuestionRequest, user_id: Opti
         if not contract:
             raise HTTPException(status_code=404, detail="Contract not found")
         
-        # Get relevant context from Pinecone
-        context_chunks = query_contract(contract_id, request.question, user_id)
+        # Use hybrid multi-query retrieval for better coverage
+        from query_expansion import hybrid_multi_query_retrieval
+        
+        print(f"\n🎯 Q&A Request: {request.question[:100]}...")
+        context_chunks = hybrid_multi_query_retrieval(
+            contract_id, 
+            request.question, 
+            user_id,
+            top_k_per_query=15  # Increased from 10 to 15 for better coverage
+        )
         
         # Check if we got any results
         if not context_chunks:
@@ -395,7 +406,7 @@ async def ask_question(contract_id: str, request: QuestionRequest, user_id: Opti
                 detail="Contract not found in vector database. Please re-upload the document."
             )
         
-        context = "\n\n".join(context_chunks)
+        context = "\n\n".join(context_chunks[:30])
         
         # Generate answer
         prompt = QA_SYSTEM_PROMPT.format(context=context, question=request.question)
@@ -408,6 +419,8 @@ async def ask_question(contract_id: str, request: QuestionRequest, user_id: Opti
             answer=answer,
             chunks_used=context_chunks[:5]  # Save top 5 chunks for reference
         )
+        
+        print(f"✅ Answer generated successfully\n")
         
         return {"answer": answer}
         

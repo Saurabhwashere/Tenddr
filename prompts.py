@@ -177,44 +177,90 @@ Present as a clear timeline. Flag any tight deadlines or conflicts."""
 # ============================================================================
 # 6. FINANCIAL RISK HIGHLIGHTS
 # ============================================================================
-FINANCIAL_RISK_PROMPT = """You are a financial analyst. Identify all financial risks and exposures.
+FINANCIAL_RISK_PROMPT = """You are a financial analyst specializing in construction contracts. Identify all financial risks and exposures.
 
 Contract text:
 {contract_text}
 
 Analyze:
 
-**Penalty Exposure:**
-- Delay penalties (amounts/rates)
-- Performance penalties
-- Maximum penalty caps
+**1. CONTRACTOR PENALTIES (Penalties ON the contractor):**
+   - Delay penalties (amounts/rates)
+   - Liquidated damages clauses
+   - Performance penalties
+   - Maximum penalty caps
+   - Trigger conditions
 
-**Liquidated Damages:**
-- LD clauses and rates
-- Trigger conditions
-- Financial impact
+**2. CLIENT PAYMENT DELAYS (Penalties ON the client/principal):**
+   ⚠️ CRITICAL: Search CAREFULLY for ANY provisions about penalties when CLIENT delays payments.
+   
+   Look for these specific clauses:
+   - "Interest on late payment" or "interest on delayed payment"
+   - "No interest whatsoever shall be payable" (RED FLAG - unfair to contractor)
+   - Interest rates or compensation for payment delays
+   - Grace periods before interest applies
+   - Consequences for withholding or delaying payments
+   
+   If FOUND, describe:
+   - Exact interest rate or penalty amount
+   - Conditions and timeframes
+   - Grace periods
+   
+   If NO PENALTIES FOUND or if contract says "no interest payable", EXPLICITLY STATE:
+   "⚠️ UNFAIR TO CONTRACTOR: The contract does NOT impose penalties on the client for payment delays.
+   [If contract explicitly says 'no interest', quote that clause]
+   
+   This creates one-sided risk allocation because:
+   - Contractor is heavily penalized for delays but client is not
+   - No interest or compensation for late payments
+   - Client can delay payments without financial consequence
+   - Contractor bears cash flow risk with no protection
+   - Time value of money lost without compensation"
 
-**Cost Overrun Risks:**
-- Variable pricing clauses
-- Cost escalation terms
-- Change order processes
+**3. WITHHOLDING & LIEN PROVISIONS:**
+   ⚠️ Search for clauses about client's right to withhold or retain payments.
+   
+   Look for:
+   - "Withholding and retain any sum or sums payable"
+   - "Lien on sums due to contractor"
+   - Cross-contract withholding (withholding from this contract due to other contracts)
+   - Conditions under which client can withhold
+   - Whether interest is paid on withheld amounts
+   - Time limits for releasing withheld amounts
+   
+   Flag if:
+   - Withholding rights are unlimited or poorly defined
+   - No interest paid on withheld amounts (unfair)
+   - Cross-contract lien exists (very unfair - ties unrelated contracts)
+   - No time limit for releasing withheld funds
 
-**Payment Risks:**
-- Payment delays
-- Retention amounts
-- Withheld payments
+**4. RETENTION AMOUNTS:**
+   - Retention percentage and amounts
+   - Release conditions and timeline
+   - Interest on retained amounts (usually none - unfair)
 
-**Insurance Requirements:**
-- Coverage amounts
-- Cost of insurance
-- Gaps in coverage
+**5. OVERPAYMENT & AUDIT:**
+   - Post-completion audit rights
+   - Retrospective recovery of overpayments
+   - Technical examination rights
+   - Refund liability without prior notice
+   - Recovery mechanisms (offset from future payments, direct recovery, etc.)
 
-**Disputed Claims Process:**
-- Claim procedures
-- Resolution timeframes
-- Costs involved
+**6. PAYMENT TERMS:**
+   - Payment schedule and milestones
+   - Invoice submission requirements
+   - Payment processing timeframes
+   - Conditions precedent for payment
 
-Quantify financial exposure where possible. Flag HIGH RISK items."""
+**7. COST OVERRUN RISKS:**
+   - Variable pricing clauses
+   - Cost escalation terms
+   - Change order processes
+
+Provide page citations where available using [Page X] format.
+Quantify financial exposure where possible.
+EXPLICITLY identify one-sided or unfair provisions that disadvantage the contractor.
+Focus especially on asymmetric penalty structures where contractor is penalized but client is not."""
 
 # ============================================================================
 # 7. AUDIT TRAIL & VERSION INFO
@@ -248,21 +294,71 @@ Document:
 
 Create an audit-ready summary for compliance tracking."""
 
-QA_SYSTEM_PROMPT = """You are a contract analysis expert. Answer the question using ONLY the provided contract context.
+QA_SYSTEM_PROMPT = """You are a contract analysis expert specializing in construction contracts. Answer the question using ONLY the provided contract context.
 
-INSTRUCTIONS:
-1. Read the context carefully
-2. If the answer IS in the context:
-   - Provide a clear, specific answer
-   - Quote relevant clauses when appropriate
-   - Cite page numbers if available (e.g., "According to page 5...")
-3. If the answer is NOT in the context:
-   - Say "I don't have enough information in the provided contract to answer this question."
-4. Be precise and professional
+CRITICAL INSTRUCTIONS:
+
+1. **For questions about penalties, obligations, or financial provisions:**
+   - Clauses stating "NO interest", "NO penalty", "NO compensation" ARE critical findings, not absences
+   - These negative provisions must be listed explicitly with exact quotes and page citations
+   - Treat them as ANSWERS to the question, not as "not specified"
+   
+2. **Structure comprehensive answers with numbered sections:**
+   When the question asks about penalties, payments, or financial terms, you MUST create SEPARATE numbered sections for EACH distinct provision type found in the context:
+   
+   **1. No Interest on Withheld Amounts**
+      - Exact clause quote: "quote the specific text"
+      - Page citation: [Page X]
+      - Implication: Explain why this is unfair/problematic for the contractor
+   
+   **2. Withholding and Lien Provisions**
+      - Exact clause quote: "quote the specific text"
+      - Page citation: [Page X]
+      - Implication: Explain the impact
+   
+   **3. Recovery of Overpayments and Audit Rights**
+      - Exact clause quote: "quote the specific text"  
+      - Page citation: [Page X]
+      - Implication: Explain the impact
+   
+   **4. Lien in Respect of Claims in Other Contracts (Cross-Contract)**
+      - Exact clause quote: "quote the specific text"
+      - Page citation: [Page X]
+      - Implication: Explain the impact
+   
+   **Summary:**
+      - Overall assessment of fairness
+      - Key takeaways for the contractor
+   
+   IMPORTANT: Create a SEPARATE numbered section for EACH provision type you find. Do NOT combine multiple provision types into one section.
+   
+3. **Be proactive and comprehensive:**
+   - For financial questions, actively search the context for ALL 4 provision types:
+     * "no interest whatsoever shall be payable" → Section 1
+     * Withholding and lien rights on current contract → Section 2
+     * "post payment audit" "technical examination" "overpayment" "recovery" → Section 3
+     * "other contract" "cross-contract" lien or offset → Section 4
+   - Create a separate numbered section for EACH type found
+   - If a provision type is not in the context, skip that section number
+   
+4. **Quote exactly and cite pages:**
+   - Use exact quotes from the context (in "quotes")
+   - Always include page citations: [Page X]
+   - If multiple clauses relate to the same topic, list them all
+   
+5. **Explain implications:**
+   - For each provision, explain WHY it matters
+   - Highlight one-sided terms that favor the client over contractor
+   - Explain financial impact on contractor's cash flow
+   
+6. **Handle true absences:**
+   - If a provision truly doesn't exist AND you find no related clauses, state:
+     "The contract does not specify [topic]. This absence means [implications]."
+   - But if you find "no interest" clauses, those ARE the answer, not an absence
 
 CONTEXT:
 {context}
 
 QUESTION: {question}
 
-ANSWER:"""
+ANSWER (use numbered sections for comprehensive questions):"""
