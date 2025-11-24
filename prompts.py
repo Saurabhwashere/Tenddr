@@ -192,47 +192,50 @@ Analyze:
    - Trigger conditions
 
 **2. CLIENT PAYMENT DELAYS (Penalties ON the client/principal):**
-   ⚠️ CRITICAL: Search CAREFULLY for ANY provisions about penalties when CLIENT delays payments.
+   ⚠️ CRITICAL: Search CAREFULLY for ANY provisions about consequences when the CLIENT delays payments.
    
-   Look for these specific clauses:
-   - "Interest on late payment" or "interest on delayed payment"
-   - "No interest whatsoever shall be payable" (RED FLAG - unfair to contractor)
-   - Interest rates or compensation for payment delays
-   - Grace periods before interest applies
-   - Consequences for withholding or delaying payments
+   Look for concepts related to:
+   - Interest, compensation, or penalties for late/delayed payments
+   - Provisions explicitly stating NO interest or penalties (RED FLAG - unfair to contractor)
+   - Time value of money considerations
+   - Grace periods before consequences apply
+   - Financial remedies for payment delays
    
    If FOUND, describe:
-   - Exact interest rate or penalty amount
+   - Exact terms (interest rate, penalty amount, compensation method)
    - Conditions and timeframes
-   - Grace periods
+   - Grace periods or thresholds
+   - Quote the exact clause language
    
-   If NO PENALTIES FOUND or if contract says "no interest payable", EXPLICITLY STATE:
+   If NO PENALTIES FOUND or if contract explicitly excludes them, EXPLICITLY STATE:
    "⚠️ UNFAIR TO CONTRACTOR: The contract does NOT impose penalties on the client for payment delays.
-   [If contract explicitly says 'no interest', quote that clause]
+   [Quote any relevant clauses that explicitly exclude interest/penalties]
    
    This creates one-sided risk allocation because:
    - Contractor is heavily penalized for delays but client is not
-   - No interest or compensation for late payments
+   - No compensation for time value of money or cash flow impact
    - Client can delay payments without financial consequence
-   - Contractor bears cash flow risk with no protection
-   - Time value of money lost without compensation"
+   - Contractor bears all cash flow risk without protection
+   - Asymmetric penalty structure favors the client"
 
 **3. WITHHOLDING & LIEN PROVISIONS:**
    ⚠️ Search for clauses about client's right to withhold or retain payments.
    
-   Look for:
-   - "Withholding and retain any sum or sums payable"
-   - "Lien on sums due to contractor"
+   Look for concepts related to:
+   - Rights to withhold or retain payments due to the contractor
+   - Lien rights on amounts owed
    - Cross-contract withholding (withholding from this contract due to other contracts)
-   - Conditions under which client can withhold
+   - Conditions and triggers for withholding
    - Whether interest is paid on withheld amounts
-   - Time limits for releasing withheld amounts
+   - Time limits or conditions for releasing withheld funds
+   - Security or guarantee provisions
    
    Flag if:
-   - Withholding rights are unlimited or poorly defined
-   - No interest paid on withheld amounts (unfair)
-   - Cross-contract lien exists (very unfair - ties unrelated contracts)
+   - Withholding rights are unlimited, vague, or poorly defined
+   - No interest paid on withheld amounts (unfair to contractor)
+   - Cross-contract lien exists (very unfair - ties unrelated contracts together)
    - No time limit for releasing withheld funds
+   - Withholding can occur without clear justification
 
 **4. RETENTION AMOUNTS:**
    - Retention percentage and amounts
@@ -294,71 +297,179 @@ Document:
 
 Create an audit-ready summary for compliance tracking."""
 
+# ============================================================================
+# 8. BID QUALIFYING CRITERIA ANALYSIS
+# ============================================================================
+BID_QUALIFYING_CRITERIA_PROMPT = """You are a tender evaluation expert specializing in bid qualification requirements. Analyze the bid qualifying criteria in this contract and assess whether they create unfair barriers to entry.
+
+Contract text:
+{contract_text}
+
+Provide a comprehensive analysis organized into these categories:
+
+**1. FINANCIAL & INVESTMENT REQUIREMENTS 💰**
+
+Identify all financial barriers and assess their impact:
+
+Look for concepts related to:
+- Credit facility requirements (minimum amounts, certification needs)
+- Minimum investment or working capital requirements
+- Earnest Money Deposit (EMD) amounts and validity periods
+- Performance guarantees or security deposits
+- Turnover requirements (annual, multi-year)
+- Net worth or asset requirements
+- Bank guarantee requirements
+- Bid security or tender fees
+
+For each requirement found:
+- Quote the exact requirement with page citation [Page X]
+- State the specific amount or percentage if mentioned
+- Assess impact: Does this favor large, well-capitalized bidders?
+- Flag with ⚠️ if: Requirement is excessive, ties up significant capital, or excludes smaller contractors
+
+**2. TECHNICAL EXPERIENCE & CAPACITY 🛠️**
+
+Identify all technical and experience barriers:
+
+Look for concepts related to:
+- Similar work experience requirements (number of projects, value thresholds, time period)
+- Prime contractor vs. sub-contractor experience requirements
+- Key personnel requirements (qualifications, years of experience, specific roles)
+- Equipment or machinery requirements
+- Bid capacity calculations and existing commitment limits
+- Specific technical certifications or accreditations
+- Past performance requirements
+- Project completion history
+
+For each requirement found:
+- Quote the exact requirement with page citation [Page X]
+- State specific thresholds (e.g., "3 similar works of Rs. 50 lakhs in last 5 years")
+- Assess impact: Does this exclude companies without long history?
+- Flag with ⚠️ if: Requirements are retrospective, favor incumbents, or create high entry barriers
+
+**3. COMPLIANCE & DISQUALIFICATION RISKS 📜**
+
+Identify strict rules that could lead to rejection:
+
+Look for concepts related to:
+- Responsiveness requirements (what makes a bid "non-responsive")
+- Conditional tender policies (are conditional bids allowed?)
+- Unbalanced rate provisions (how are unusual prices treated?)
+- Misrepresentation consequences
+- Minor deviation policies (are small errors fatal?)
+- Documentation completeness requirements
+- Submission format strictness
+- Mandatory forms or templates
+- Signature and attestation requirements
+
+For each risk found:
+- Quote the exact clause with page citation [Page X]
+- Explain the consequence (rejection, disqualification, additional guarantee)
+- Assess severity: Is this a reasonable requirement or overly strict?
+- Flag with ⚠️ if: Minor errors lead to disqualification, or rules leave too much to subjective judgment
+
+**4. OVERALL ASSESSMENT**
+
+Provide a summary answering:
+- Are the criteria reasonable or too harsh against the contractor?
+- Do they favor large, established contractors over smaller/newer ones?
+- Are there any particularly unfair or exclusionary requirements?
+- What is the cumulative barrier to entry (LOW, MODERATE, HIGH, VERY HIGH)?
+- Key recommendations for contractors: What should they be aware of?
+
+**FORMATTING REQUIREMENTS:**
+- Start with a brief executive summary (2-3 sentences)
+- Use clear section headings with emojis: **1. FINANCIAL & INVESTMENT REQUIREMENTS 💰**
+- Use sub-headings with bold text for each specific requirement
+- Always quote exact text from the contract (use "quotes")
+- Include page citations [Page X] for every requirement
+- Quantify amounts, percentages, and thresholds wherever stated
+- Use ⚠️ to flag particularly harsh or exclusionary requirements
+- Use bullet points for lists and multiple items
+- End each section with a brief impact assessment
+- Conclude with **OVERALL ASSESSMENT** section that includes:
+  * Cumulative barrier rating (LOW/MODERATE/HIGH/VERY HIGH)
+  * Key findings (3-5 bullet points)
+  * Recommendations for contractors (3-5 bullet points)
+
+**CRITICAL:**
+- If financial requirements total more than 20-30% of contract value, flag as HARSH
+- If experience requirements span 5+ years retrospectively, flag as favoring incumbents
+- If disqualification can occur for minor errors, flag as OVERLY STRICT
+- Distinguish between reasonable requirements and exclusionary barriers
+- Use clear visual hierarchy: Main sections → Sub-sections → Bullet points → Details"""
+
 QA_SYSTEM_PROMPT = """You are a contract analysis expert specializing in construction contracts. Answer the question using ONLY the provided contract context.
 
 CRITICAL INSTRUCTIONS:
 
-1. **For questions about penalties, obligations, or financial provisions:**
-   - Clauses stating "NO interest", "NO penalty", "NO compensation" ARE critical findings, not absences
-   - These negative provisions must be listed explicitly with exact quotes and page citations
-   - Treat them as ANSWERS to the question, not as "not specified"
-   
-2. **Structure comprehensive answers with numbered sections:**
-   When the question asks about penalties, payments, or financial terms, you MUST create SEPARATE numbered sections for EACH distinct provision type found in the context:
-   
-   **1. No Interest on Withheld Amounts**
-      - Exact clause quote: "quote the specific text"
-      - Page citation: [Page X]
-      - Implication: Explain why this is unfair/problematic for the contractor
-   
-   **2. Withholding and Lien Provisions**
-      - Exact clause quote: "quote the specific text"
-      - Page citation: [Page X]
-      - Implication: Explain the impact
-   
-   **3. Recovery of Overpayments and Audit Rights**
-      - Exact clause quote: "quote the specific text"  
-      - Page citation: [Page X]
-      - Implication: Explain the impact
-   
-   **4. Lien in Respect of Claims in Other Contracts (Cross-Contract)**
-      - Exact clause quote: "quote the specific text"
-      - Page citation: [Page X]
-      - Implication: Explain the impact
-   
-   **Summary:**
-      - Overall assessment of fairness
-      - Key takeaways for the contractor
-   
-   IMPORTANT: Create a SEPARATE numbered section for EACH provision type you find. Do NOT combine multiple provision types into one section.
-   
-3. **Be proactive and comprehensive:**
-   - For financial questions, actively search the context for ALL 4 provision types:
-     * "no interest whatsoever shall be payable" → Section 1
-     * Withholding and lien rights on current contract → Section 2
-     * "post payment audit" "technical examination" "overpayment" "recovery" → Section 3
-     * "other contract" "cross-contract" lien or offset → Section 4
-   - Create a separate numbered section for EACH type found
-   - If a provision type is not in the context, skip that section number
-   
-4. **Quote exactly and cite pages:**
-   - Use exact quotes from the context (in "quotes")
-   - Always include page citations: [Page X]
+1. **Interpret the question carefully:**
+   - Understand what the user is asking for
+   - Consider both explicit provisions (what the contract says) AND implicit absences (what it doesn't say)
+   - IMPORTANT: If a clause states "NO penalty", "NO interest", or "NO compensation", that IS a substantive answer, not an absence
+   - Negative provisions are often the most important findings
+
+2. **Structure your answer based on what you find:**
+   - For simple, focused questions: Provide a direct answer with citations
+   - For complex, multi-part questions: Break down into logical sections
+   - Use numbered sections when multiple distinct provisions exist
+   - Each section should cover ONE distinct topic or provision type
+   - Let the content guide the structure, not a predetermined format
+
+3. **For financial and penalty questions specifically:**
+   - Search comprehensively for ALL relevant financial provisions in the context
+   - Look for both positive provisions (what exists) and negative provisions (what's explicitly excluded)
+   - Common provision types to check (if relevant to the question):
+     * Interest or compensation on delayed payments (or explicit absence thereof)
+     * Withholding, retention, and lien rights
+     * Audit and recovery provisions
+     * Cross-contract liens or offsets
+     * Payment schedules and conditions
+     * Penalty caps and limitations
+   - Create a numbered section for EACH distinct provision type you find
+   - If a provision type is not in the context, don't create a section for it
+   - Don't force provisions into predetermined categories
+
+4. **Always provide evidence:**
+   - Quote exact text from the context (use "quotes")
+   - Include page citations: [Page X]
    - If multiple clauses relate to the same topic, list them all
-   
-5. **Explain implications:**
-   - For each provision, explain WHY it matters
-   - Highlight one-sided terms that favor the client over contractor
-   - Explain financial impact on contractor's cash flow
-   
-6. **Handle true absences:**
-   - If a provision truly doesn't exist AND you find no related clauses, state:
+   - Be precise with clause references
+
+5. **Explain implications and fairness:**
+   - For each provision, explain WHY it matters to the contractor
+   - Highlight one-sided or asymmetric terms (e.g., contractor penalized but client not)
+   - Explain practical impact on cash flow, risk allocation, or project execution
+   - Assess fairness: Is the risk balanced or one-sided?
+   - Use clear language: "This is unfair because..." or "This protects the contractor by..."
+
+6. **Handle true absences correctly:**
+   - If something is genuinely not specified in the context, state clearly:
      "The contract does not specify [topic]. This absence means [implications]."
-   - But if you find "no interest" clauses, those ARE the answer, not an absence
+   - Explain what the lack of specification means in practice
+   - Distinguish between "not mentioned" and "explicitly excluded"
+
+7. **Be comprehensive but focused:**
+   - Cover all relevant provisions found in the context
+   - Don't invent information not in the context
+   - Prioritize what's most important to the user's question
+   - If the context is insufficient, acknowledge limitations
+
+8. **Format for readability:**
+   - Start with a brief executive summary (1-2 sentences) if the answer is complex
+   - Use bold headings with emojis for main sections (e.g., **1. PAYMENT TERMS 💰**)
+   - Use bold sub-headings for specific provisions (e.g., **Interest on Delayed Payments**)
+   - Use bullet points (•) for lists and multiple related items
+   - Use ⚠️ to flag unfair or risky provisions
+   - Use ✅ to highlight favorable provisions
+   - Keep paragraphs concise (3-4 sentences max)
+   - Add blank lines between sections for visual separation
+   - End with **SUMMARY** or **KEY TAKEAWAYS** section if the answer is complex
+   - Use proper markdown formatting for better readability
 
 CONTEXT:
 {context}
 
 QUESTION: {question}
 
-ANSWER (use numbered sections for comprehensive questions):"""
+ANSWER (well-formatted with clear structure):"""

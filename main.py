@@ -54,6 +54,8 @@ async def upload_contract(
     user_id: Optional[str] = Header(None, alias="X-User-Id")
 ):
     """Upload and process a PDF contract with user isolation."""
+    import time
+    start_time = time.time()
     
     # Validate user_id is provided
     if not user_id:
@@ -107,7 +109,12 @@ async def upload_contract(
         text = "\n\n".join([page["text"] for page in pages_data])
         
         # Create enhanced chunks with metadata for better filtering
-        chunks = create_enhanced_chunks_with_pages(pages_data, chunk_size=500, overlap=100)
+        # NEW: Using hierarchical chunking for better context preservation
+        chunks = create_enhanced_chunks_with_pages(
+            pages_data, 
+            use_hierarchical=True,  # Enable hierarchical chunking
+            use_hybrid=True         # Keep hybrid classification
+        )
         
         # Store in Pinecone with user isolation
         store_in_pinecone(contract_id, chunks, user_id)
@@ -136,7 +143,7 @@ async def upload_contract(
         # Run automated risk detection (uses RAG to search entire contract)
         try:
             print(f"🔍 Running automated risk detection...")
-            risk_results = run_risk_analysis(contract_id, user_id, model="gpt-4o")
+            risk_results = run_risk_analysis(contract_id, user_id, model="deepseek-chat")
         except Exception as e:
             # If risk detection fails, log error but continue with other analyses
             print(f"⚠️ Risk detection failed: {e}")
@@ -164,7 +171,13 @@ async def upload_contract(
         # Clean up temp file
         os.remove(temp_path)
         
+        # Calculate and display total time
+        end_time = time.time()
+        total_time = end_time - start_time
+        minutes = int(total_time // 60)
+        seconds = int(total_time % 60)
         print(f"✅ Contract processed successfully: {contract_id}")
+        print(f"⏱️  Total analysis time: {minutes}m {seconds}s ({total_time:.2f}s)")
         
         # Return upload success with risk summary for quick feedback
         return {
@@ -191,6 +204,8 @@ async def upload_contract(
 @app.post("/reanalyze/{contract_id}")
 async def reanalyze_contract(contract_id: str):
     """Re-run analysis on an existing contract (useful when analysis logic improves)."""
+    import time
+    start_time = time.time()
     
     # Check if contract exists
     contract = get_contract_complete(contract_id)
@@ -227,7 +242,12 @@ async def reanalyze_contract(contract_id: str):
         text = "\n\n".join([page["text"] for page in pages_data])
         
         # Re-create enhanced chunks with metadata
-        chunks = create_enhanced_chunks_with_pages(pages_data, chunk_size=500, overlap=100)
+        # Using hierarchical chunking for better context preservation
+        chunks = create_enhanced_chunks_with_pages(
+            pages_data,
+            use_hierarchical=True,
+            use_hybrid=True
+        )
         
         # Delete old vectors from Pinecone and store new ones
         print("🗑️  Deleting old vectors from Pinecone...")
@@ -267,7 +287,7 @@ async def reanalyze_contract(contract_id: str):
         # Run automated risk detection
         try:
             print(f"🔍 Re-running automated risk detection...")
-            risk_results = run_risk_analysis(contract_id, contract["uploaded_by"], model="gpt-4o")
+            risk_results = run_risk_analysis(contract_id, contract["uploaded_by"], model="deepseek-chat")
         except Exception as e:
             print(f"⚠️ Risk detection failed: {e}")
             risk_results = empty_risk_analysis
@@ -294,7 +314,13 @@ async def reanalyze_contract(contract_id: str):
         # Clean up temp file
         os.remove(temp_path)
         
+        # Calculate and display total time
+        end_time = time.time()
+        total_time = end_time - start_time
+        minutes = int(total_time // 60)
+        seconds = int(total_time % 60)
         print(f"✅ Re-analysis complete: {contract_id}")
+        print(f"⏱️  Total re-analysis time: {minutes}m {seconds}s ({total_time:.2f}s)")
         
         return {
             "id": contract_id,
@@ -355,19 +381,17 @@ async def get_results(contract_id: str):
             "risks_by_severity": data.get("risks_by_severity") or empty_risk_analysis["risks_by_severity"],
             "all_risks": data.get("all_risks") or empty_risk_analysis["all_risks"]
         },
-        # All 7 comprehensive analysis results
-        "compliance_checklist": data.get("compliance_checklist") or "Analysis not available.",
-        "clause_summaries": data.get("clause_summaries") or "Analysis not available.",
+        # All 5 comprehensive analysis results + overview
+        "contract_overview": data.get("contract_overview") or {"topics": []},
         "scope_alignment": data.get("scope_alignment") or "Analysis not available.",
-        "completeness_check": data.get("completeness_check") or "Analysis not available.",
         "timeline_milestones": data.get("timeline_milestones") or "Analysis not available.",
         "financial_risks": data.get("financial_risks") or "Analysis not available.",
-        "audit_trail": data.get("audit_trail") or "Analysis not available.",
+        "bid_qualifying_criteria": data.get("bid_qualifying_criteria") or "Analysis not available.",
         "validation": data.get("validation") or {
             "completeness_score": 0.0,
             "status": "INCOMPLETE",
             "sections_completed": 0,
-            "total_sections": 7,
+            "total_sections": 5,
             "recommendation": "Analysis not available"
         }
     }
@@ -428,8 +452,57 @@ async def ask_question(contract_id: str, request: QuestionRequest, user_id: Opti
         # If it's already an HTTPException, re-raise it
         if isinstance(e, HTTPException):
             raise
-        # Otherwise, return a generic error
+        # Log the full error for debugging
+        import traceback
+        print(f"\n❌ ERROR in Q&A endpoint:")
+        print(f"   Error type: {type(e).__name__}")
+        print(f"   Error message: {str(e)}")
+        print(f"   Traceback:")
+        traceback.print_exc()
+        print()
+        # Return a detailed error
         raise HTTPException(status_code=500, detail=f"Error processing question: {str(e)}")
+
+@app.post("/summarize")
+async def summarize_text(request: dict, user_id: Optional[str] = Header(None, alias="X-User-Id")):
+    """
+    Direct LLM summarization endpoint (no RAG).
+    Expects: { "text": "...", "max_words": 300 }
+    """
+    from rag import generate_response
+    
+    if not user_id:
+        raise HTTPException(status_code=400, detail="X-User-Id header is required")
+    
+    try:
+        text = request.get("text", "")
+        max_words = request.get("max_words", 300)
+        
+        if not text:
+            raise HTTPException(status_code=400, detail="Text is required")
+        
+        # Create summarization prompt
+        prompt = f"""Summarize the following text in {max_words} words or less. 
+Focus on the key facts and information. Be direct and factual. 
+Do not use phrases like "Based on the context" or "According to the document".
+Write in a natural, conversational tone that summarizes the key points.
+
+Text to summarize:
+{text}
+
+Concise Summary ({max_words} words max):"""
+        
+        # Generate summary using LLM (no RAG)
+        summary = generate_response(prompt)
+        
+        return {"summary": summary.strip()}
+        
+    except Exception as e:
+        import traceback
+        print(f"\n❌ ERROR in summarize endpoint:")
+        print(f"   Error: {str(e)}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error summarizing text: {str(e)}")
 
 @app.get("/")
 async def root():
@@ -711,3 +784,33 @@ async def debug_metadata(contract_id: str):
         ]
     except Exception as e:
         return {"error": str(e)}
+
+@app.get("/debug/database/{contract_id}")
+async def debug_database(contract_id: str):
+    """Debug endpoint to see what's actually in the database for a contract."""
+    try:
+        # Get raw data from database
+        data = get_contract_complete(contract_id)
+        
+        if not data:
+            return {"error": "Contract not found"}
+        
+        # Return all keys and check if contract_overview exists
+        return {
+            "contract_id": contract_id,
+            "available_keys": list(data.keys()),
+            "has_contract_overview": "contract_overview" in data,
+            "contract_overview_value": data.get("contract_overview"),
+            "contract_overview_type": str(type(data.get("contract_overview"))),
+            "raw_data_sample": {
+                "id": data.get("id"),
+                "filename": data.get("filename"),
+                "contract_overview": data.get("contract_overview")
+            }
+        }
+    except Exception as e:
+        import traceback
+        return {
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }

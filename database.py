@@ -59,19 +59,17 @@ def save_contract_analysis(
     validation: Dict,
     user_id: str
 ) -> None:
-    """Save comprehensive analysis results (7 types)."""
+    """Save comprehensive analysis results (5 types + overview)."""
     supabase = get_supabase_client()
     
     data = {
         "contract_id": contract_id,
         "user_id": user_id,
-        "compliance_checklist": analysis_results.get("compliance_checklist"),
-        "clause_summaries": analysis_results.get("clause_summaries"),
+        "contract_overview": analysis_results.get("contract_overview"),
         "scope_alignment": analysis_results.get("scope_alignment"),
-        "completeness_check": analysis_results.get("completeness_check"),
         "timeline_milestones": analysis_results.get("timeline_milestones"),
         "financial_risks": analysis_results.get("financial_risks"),
-        "audit_trail": analysis_results.get("audit_trail"),
+        "bid_qualifying_criteria": analysis_results.get("bid_qualifying_criteria"),
         "validation": validation
     }
     

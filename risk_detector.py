@@ -1,9 +1,9 @@
 # LLM-Powered Risk Detection System with RAG
-# Detects critical risks in construction contracts using GPT-4 + Pinecone search
+# Detects critical risks in construction contracts using Gemini + Pinecone search
 
 import json
 from typing import Dict, List
-from rag import query_contract, get_openai_client
+from rag import query_contract, get_deepseek_client
 from risk_catalog import RISK_DEFINITIONS
 
 # Use risk definitions from the catalog
@@ -14,10 +14,10 @@ def detect_risk_with_llm(
     contract_id: str,
     risk_definition: Dict,
     user_id: str,
-    model: str = "gpt-4o"
+    model: str = "deepseek-chat"
 ) -> Dict:
     """
-    Detect a specific risk using RAG + GPT-4o analysis.
+    Detect a specific risk using RAG + Gemini analysis.
 
     How it works:
     1. Use RAG to search entire contract for relevant sections (Pinecone + reranking)
@@ -69,7 +69,7 @@ def detect_risk_with_llm(
         contract_text = contract_text[:3000]
 
     # Step 3: Build the LLM prompt
-    client = get_openai_client()
+    client = get_deepseek_client()
 
     prompt = f"""You are a construction contract risk analyst with expertise in identifying financial and legal risks.
 
@@ -126,12 +126,14 @@ If the risk is NOT found, return:
 """
 
     try:
-        # Step 4: Call GPT-4 with JSON mode for structured output
+        # Step 4: Call DeepSeek for structured output
         response = client.chat.completions.create(
             model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,  # Consistent results
-            response_format={"type": "json_object"}  # Force JSON output
+            messages=[
+                {"role": "system", "content": "You are a construction contract risk analyst. Return only valid JSON."},
+                {"role": "user", "content": prompt}
+            ],
+            stream=False
         )
 
         # Step 5: Parse the JSON response

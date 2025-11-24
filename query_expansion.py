@@ -5,7 +5,7 @@ Uses hybrid approach: LLM intelligence + domain knowledge
 
 import re
 from typing import List, Dict
-from rag import query_contract, get_openai_client
+from rag import query_contract, get_deepseek_client
 
 def decompose_question_with_llm(question: str) -> List[str]:
     """
@@ -18,7 +18,7 @@ def decompose_question_with_llm(question: str) -> List[str]:
     Returns:
         List of 4-5 diverse search queries
     """
-    client = get_openai_client()
+    client = get_deepseek_client()
     
     decomposition_prompt = f"""You are a contract analysis expert. A user asked this question about a construction contract:
 
@@ -46,10 +46,12 @@ Now generate queries for the user's question. Return ONLY the queries, one per l
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",  # Fast and cheap
-            messages=[{"role": "user", "content": decomposition_prompt}],
-            temperature=0.3,  # Low temp for consistency
-            max_tokens=300
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": "You are a contract analysis expert. Generate search queries as requested."},
+                {"role": "user", "content": decomposition_prompt}
+            ],
+            stream=False
         )
         
         # Parse the response into individual queries
@@ -76,7 +78,7 @@ def classify_question_type(question: str) -> str:
     
     Returns: 'financial', 'timeline', 'compliance', 'scope', 'risk', 'general'
     """
-    client = get_openai_client()
+    client = get_deepseek_client()
     
     classification_prompt = f"""Classify this contract question into ONE category:
 
@@ -94,10 +96,12 @@ Return ONLY the category name in lowercase, nothing else."""
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": classification_prompt}],
-            temperature=0.1,
-            max_tokens=20
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": "You are a contract classifier. Return only the category name."},
+                {"role": "user", "content": classification_prompt}
+            ],
+            stream=False
         )
         
         category = response.choices[0].message.content.strip().lower()
@@ -290,9 +294,9 @@ def hybrid_multi_query_retrieval(
         
         try:
             chunks = query_contract(
-                contract_id,
-                query,
-                user_id,
+                contract_id, 
+                query, 
+                user_id, 
                 top_k=top_k_per_query,
                 metadata_filter=metadata_filter
             )

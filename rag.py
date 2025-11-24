@@ -1,4 +1,4 @@
-# RAG logic (LangChain)
+# RAG logic with DeepSeek AI
 import os
 from openai import OpenAI
 from pinecone import Pinecone, ServerlessSpec
@@ -9,15 +9,26 @@ load_dotenv()
 INDEX_NAME = "contracts"
 
 # Pinecone upsert configuration to avoid 4 MB request limit
-DEFAULT_UPSERT_BATCH_SIZE = int(os.getenv("PINECONE_UPSERT_BATCH_SIZE", "50"))
+DEFAULT_UPSERT_BATCH_SIZE = int(os.getenv("PINECONE_UPSERT_BATCH_SIZE", "100"))  # Increased from 50 to 100 for faster upserts
 DEFAULT_TEXT_PREVIEW_CHARS = int(os.getenv("PINECONE_TEXT_PREVIEW_CHARS", "5000"))  # Increased from 2000 to 5000
 
 # Initialize clients lazily
-_openai_client = None
+_deepseek_client = None
+_openai_client = None  # Still needed for embeddings
 _pinecone_client = None
 
+def get_deepseek_client():
+    """Get or create DeepSeek client."""
+    global _deepseek_client
+    if _deepseek_client is None:
+        _deepseek_client = OpenAI(
+            api_key=os.getenv("DEEPSEEK_API_KEY"),
+            base_url="https://api.deepseek.com"
+        )
+    return _deepseek_client
+
 def get_openai_client():
-    """Get or create OpenAI client."""
+    """Get or create OpenAI client (for embeddings only)."""
     global _openai_client
     if _openai_client is None:
         _openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -53,9 +64,9 @@ def create_embeddings(texts: list[str]) -> list[list[float]]:
     
     # OpenAI embeddings API limits:
     # - Max 8191 tokens per request for text-embedding-ada-002
-    # - With ~500 word chunks, use smaller batches to stay under limit
-    # - Safe batch size: 100 chunks (~200K chars, well under token limit)
-    batch_size = 100
+    # - With ~500 word chunks, use larger batches for better throughput
+    # - Optimized batch size: 200 chunks (still well under token limit)
+    batch_size = 200
     
     # Split texts into batches
     batches = []
@@ -73,9 +84,9 @@ def create_embeddings(texts: list[str]) -> list[list[float]]:
         )
         return (idx, [item.embedding for item in response.data])
     
-    # Process batches in parallel (5 at a time to respect rate limits)
+    # Process batches in parallel (10 at a time for better throughput)
     all_embeddings = [None] * len(texts)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         future_to_batch = {
             executor.submit(process_batch, batch_data): batch_data
             for batch_data in batches
@@ -352,15 +363,44 @@ def query_contract(contract_id: str, question: str, user_id: str, top_k: int = 5
     print(f"  ✅ Returning {len(relevant_chunks)} chunks to LLM\n")
     return relevant_chunks
 
-def generate_response(prompt: str) -> str:
-    """Generate AI response using OpenAI."""
-    client = get_openai_client()
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.7
-    )
-    return response.choices[0].message.content
+def generate_response(prompt: str, max_retries: int = 3) -> str:
+    """Generate AI response using DeepSeek with retry logic."""
+    import time
+    
+    client = get_deepseek_client()
+    
+    for attempt in range(max_retries):
+        try:
+            response = client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant that analyzes contracts."},
+                    {"role": "user", "content": prompt}
+                ],
+                stream=False
+            )
+            
+            # Extract response text
+            return response.choices[0].message.content
+                
+        except Exception as e:
+            error_str = str(e)
+            
+            # Check if it's a rate limit or overload error
+            if "503" in error_str or "429" in error_str or "rate" in error_str.lower():
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 2  # Exponential backoff: 2s, 4s, 6s
+                    print(f"  ⚠️ Rate limit hit, retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise Exception(f"Rate limit exceeded after {max_retries} attempts. Please try again in a few minutes.")
+            
+            # For other errors, raise immediately
+            else:
+                raise Exception(f"DeepSeek API error: {error_str}")
+    
+    raise Exception("Failed to generate response after all retries")
 
 def delete_from_pinecone(contract_id: str) -> bool:
     """

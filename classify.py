@@ -5,6 +5,7 @@ import re
 import json
 from typing import List, Dict
 from risk_catalog import CATEGORY_KEYWORDS, CLAUSE_TYPE_PATTERNS, RISK_DEFINITIONS
+from rag import get_deepseek_client
 
 def find_keyword_matches(text: str, keywords: List[str]) -> List[str]:
     """Find which keywords appear in the text (case-insensitive)."""
@@ -121,12 +122,10 @@ def contains_high_value_content(text: str) -> bool:
 
 def classify_chunk_with_llm(chunk_text: str) -> Dict:
     """
-    Use LLM (GPT-4o-mini) to classify chunk with high accuracy.
+    Use LLM (DeepSeek) to classify chunk with high accuracy.
     This is slower but more accurate than keyword matching.
     """
-    from rag import get_openai_client
-    
-    client = get_openai_client()
+    client = get_deepseek_client()
     
     # Truncate if too long (keep first 800 chars for context)
     if len(chunk_text) > 800:
@@ -158,10 +157,12 @@ Return ONLY the JSON, no explanation."""
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,  # Low temp for consistency
-            max_tokens=200
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that classifies contract text. Return only JSON."},
+                {"role": "user", "content": prompt}
+            ],
+            stream=False
         )
         
         result = json.loads(response.choices[0].message.content)
